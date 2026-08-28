@@ -41,6 +41,14 @@ research question, so it is isolated and instrumented from day one — every agg
 must write `rule`, `explanation`, and `decisive_evidence_ids` into
 `aggregation_trace`, and the type system enforces it.
 
+Because of that split, **all five aggregators run on identical per-pair scores** — the
+NLI model runs once and comparing four aggregation rules costs zero extra forward
+passes.
+
+Two null baselines are wired in from the start, not bolted on later:
+`claim_only` (verifies with the evidence blanked) and `majority` (votes, discarding
+probability magnitudes). If the real pipeline cannot beat them, that is the finding.
+
 ## Build status
 
 The original seven-step plan and `docs/CLAUDE_CODE_EXTENSION_PROMPT.md` have been
@@ -51,7 +59,7 @@ harness's, so there is one backend, not two.
 |---|---|---|
 | 1 | `src/core/` — types, interfaces, registry, config | **done** |
 | A | corpus layer + mini & FEVER corpora + BM25 / dense / hybrid retrievers | **done** |
-| B | extractors, verifiers, 4 aggregators, 2 null baselines | not started |
+| B | extractors, verifiers, 4 aggregators, 2 null baselines | **done** |
 | C | trace writer + CLI end-to-end on 20 examples | not started |
 | D | one FastAPI app: `/analyze`, `/analyze/oracle`, `/verify/quick`, `/verify/full`, `/annotate`, `/health` | not started |
 | E | Streamlit inspection harness | not started |
@@ -78,7 +86,7 @@ The core contracts and the corpus layer need only `pyyaml` and `pytest`. BM25 ad
 
 ```powershell
 python -m scripts.build_mini_corpus   # regenerate the offline corpus (already checked in)
-python -m pytest                      # 119 tests; 6 skip without the model stack
+python -m pytest                      # 229 tests, 0 skipped with the full stack
 
 # the FEVER corpus (optional; 1.72 GB download, one streaming pass, several minutes)
 curl -L -o data/raw/shared_task_dev.jsonl https://fever.ai/download/fever/shared_task_dev.jsonl
@@ -99,7 +107,11 @@ src/core/config.py           config load / override / hash, seeding, git provena
 src/data/corpus.py           canonical sentence order + fingerprint (index-alignment guard)
 src/data/examples.py         labelled examples with gold evidence keys
 src/data/metrics.py          per-example Recall@k, gold ranks (None when gold is empty)
-src/components/retrievers.py BM25, dense (bge-small + FAISS flat), hybrid (RRF)
+src/components/extractors.py  spacy sentence split; LLM decomposition from a cache
+src/components/retrievers.py  BM25, dense (bge-small + FAISS flat), hybrid (RRF)
+src/components/rerankers.py   noop, cross-encoder (ms-marco-MiniLM)
+src/components/verifiers.py   NLI (DeBERTa-v3-base), cosine similarity, claim-only NULL
+src/components/aggregators.py max-entailment, noisy-OR, rank-weighted, threshold+abstain, majority NULL
 scripts/build_mini_corpus.py  regenerates the checked-in 40-doc offline corpus
 scripts/build_debug_corpus.py FEVER -> data/debug/ (streams the 1.7 GB dump, never extracts)
 configs/debug.yaml           FEVER debug harness (read its header before believing a number)

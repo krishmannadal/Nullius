@@ -137,3 +137,35 @@ three quarters of an identifiable slice while looking like rounding error.
 Fixed by `normalize_page_id()` at both boundaries (ADR-023) and rebuilt. Note the
 same character caused the cp1252 crash above: the warning that found the bug is the
 warning that could not print it.
+
+## Step B — extractors, verifiers, aggregators (2026-08-28)
+
+```bash
+# spacy on its own pass -- installs in seconds; the earlier >15 min backtrack was from
+# resolving it together with everything else, not a real conflict
+./.venv/Scripts/python.exe -m pip install --no-cache-dir spacy==3.7.5
+./.venv/Scripts/python.exe -m spacy download en_core_web_sm      # 3.7.1
+
+# VRAM + label mapping measured BEFORE committing to the checkpoint
+#   MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli, fp16, RTX 4050:
+#     184.4M params | weights 359 MiB | peak 467 MiB @ batch16x512 of 6140 MiB
+#     forward 50-95 ms
+#   id2label = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}   <- REVERSE of the
+#     common MNLI convention; hardcoding index 0 as contradiction would swap
+#     Supported/Contradicted project-wide with no structural symptom
+#   tokenizer.model_max_length = 1000000000000000019884624838656
+#     -> truncation=True ALONE IS A NO-OP; explicit max_length required everywhere
+
+./.venv/Scripts/python.exe -m pytest tests    # 229 passed, 0 skipped
+```
+
+Known-answer probe confirming the mapping behaves as its names claim:
+
+```
+expect ENTAILMENT     -> entailment     {'entailment': 0.9942, ...}
+expect CONTRADICTION  -> contradiction  {'contradiction': 0.9995, ...}
+expect NEUTRAL        -> neutral        {'neutral': 0.9988, ...}
+```
+
+No downloads beyond the two checkpoints (~370 MB DeBERTa, ~90 MB cross-encoder) and
+en_core_web_sm (12 MB).

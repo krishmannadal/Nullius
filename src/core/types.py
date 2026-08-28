@@ -34,7 +34,8 @@ from typing import Any, Mapping, Optional
 # corpus that will outlive several refactors; the frontend must be able to refuse
 # to render a trace it does not understand rather than mis-render it.
 #   1.1.0  Evidence.retriever_meta added (additive; readers of 1.0.x traces get {}).
-SCHEMA_VERSION = "1.1.0"
+#   1.2.0  EvidenceVerdict.evidence_rank / evidence_score added (additive).
+SCHEMA_VERSION = "1.2.0"
 
 # Tolerance for "these three numbers are a distribution".  fp16 softmax output on
 # GPU is not exact; 1e-3 is loose enough for fp16 and tight enough to catch a real
@@ -372,6 +373,13 @@ class EvidenceVerdict:
     similarity: Optional[float]
     verifier_name: str
     latency_ms: float
+    #: Denormalised from the Evidence this verdict scores. An Aggregator receives only
+    #: verdicts (see interfaces.py), so a retrieval-weighted aggregator would otherwise
+    #: have no way to see rank or retrieval score without being handed the corpus --
+    #: which would break its purity. Copying them here keeps the signal inside the
+    #: trace, where it is visible, rather than smuggled in through a side channel.
+    evidence_rank: Optional[int] = None
+    evidence_score: Optional[float] = None
 
     def __post_init__(self) -> None:
         probs = (self.p_entail, self.p_contra, self.p_neutral)
@@ -396,6 +404,10 @@ class EvidenceVerdict:
             raise ValueError("an EvidenceVerdict with no probabilities and no similarity is empty")
         if self.latency_ms < 0:
             raise ValueError(f"latency_ms must be >= 0, got {self.latency_ms}")
+        if self.evidence_rank is not None and self.evidence_rank < 1:
+            raise ValueError(f"evidence_rank is 1-based, got {self.evidence_rank}")
+        if self.evidence_score is not None:
+            _check_finite("evidence_score", self.evidence_score)
 
     @property
     def has_nli(self) -> bool:
@@ -411,6 +423,8 @@ class EvidenceVerdict:
             "similarity": self.similarity,
             "verifier_name": self.verifier_name,
             "latency_ms": self.latency_ms,
+            "evidence_rank": self.evidence_rank,
+            "evidence_score": self.evidence_score,
         }
 
     @classmethod
@@ -428,6 +442,8 @@ class EvidenceVerdict:
             similarity=_opt("similarity"),
             verifier_name=str(d["verifier_name"]),
             latency_ms=float(d["latency_ms"]),
+            evidence_rank=None if d.get("evidence_rank") is None else int(d["evidence_rank"]),
+            evidence_score=None if d.get("evidence_score") is None else float(d["evidence_score"]),
         )
 
 

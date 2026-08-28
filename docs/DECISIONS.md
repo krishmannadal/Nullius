@@ -452,3 +452,122 @@ the loss (it is biased, so no).
 
 **Revisit when.** Another dataset joins with its own normalisation convention. The fix
 generalises: normalise at the boundary, never at comparison sites.
+
+---
+
+## ADR-024 — 2026-08-28 — NLI label indices are read from the checkpoint, never hardcoded
+
+**Decision.** `_resolve_label_indices` reads `model.config.id2label` at load and raises
+if the three names are not each present exactly once. Everything downstream indexes
+through the resolved dict, never through a literal.
+
+**Why, measured.** `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` ships
+`{0: entailment, 1: neutral, 2: contradiction}` — the **reverse** of the common MNLI
+convention. Hardcoding index 0 as contradiction would swap Supported and Contradicted
+for every claim in the project. Nothing structural catches it: the probabilities still
+form a simplex, so `EvidenceVerdict` validation passes and the numbers look like
+plausible model output.
+
+**Alternatives.** Hardcode the order (the bug). Trust the config without a behavioural
+check (a config can be wrong or a checkpoint re-headed) — so a known-answer probe over
+three obvious entail/refute/neutral triples runs in the tests as well.
+
+**Revisit when.** Never. A `LABEL_0`-style checkpoint raises rather than getting an
+arbitrary permutation.
+
+---
+
+## ADR-025 — 2026-08-28 — Every tokenizer call passes an explicit `max_length`
+
+**Decision.** `truncation="longest_first", max_length=256` on every call. No bare
+`truncation=True` anywhere.
+
+**Why, measured.** `tokenizer.model_max_length` for this checkpoint is
+`1000000000000000019884624838656` — the sentinel it ships when no limit is configured.
+`truncation=True` alone is therefore **a complete no-op**: a 20,000-word evidence comes
+back at >10,000 tokens. `test_without_explicit_max_length_truncation_is_a_no_op`
+demonstrates it rather than asserting it.
+
+`longest_first` rather than the default because `truncation_side="right"` means naive
+truncation removes from the end of the concatenated pair. `longest_first` removes from
+whichever member is currently longer, so a short claim survives intact against enormous
+evidence — which is the only policy that never destroys the thing being verified.
+
+**Cost, accepted.** `max_length=256` truncates a small fraction of FEVER sentences.
+That fraction is a placeholder, unmeasured, and logged as OQ-027.
+
+---
+
+## ADR-026 — 2026-08-28 — `evidence_rank` / `evidence_score` are denormalised into the verdict
+
+**Decision.** `EvidenceVerdict` gained two optional fields, set by `make_verdict` from
+the `Evidence` being scored. SCHEMA_VERSION 1.1.0 → 1.2.0, additive.
+
+**Why.** `Aggregator.aggregate(claim, verdicts)` receives no evidence, by design —
+purity is what makes aggregators comparable and keeps them from reaching the corpus.
+But `WeightedByRetrievalAggregator` needs retrieval position. The three options were:
+change the ABC signature (breaks the spec and the isolation), hand the aggregator the
+corpus (breaks purity), or put the signal in the verdict where the trace can see it.
+
+This is exactly what `core-interfaces.md` already required: *"if an aggregator needs a
+signal, that signal must already be inside an EvidenceVerdict, which forces it to be
+visible in the trace."*
+
+**Revisit when.** An aggregator needs something else off the Evidence. The answer will
+be the same: denormalise it, visibly.
+
+---
+
+## ADR-027 — 2026-08-28 — Aggregator weights use rank, not retrieval score
+
+**Decision.** `WeightedByRetrievalAggregator` computes `w_i = rank_i^-alpha`.
+`evidence_score` is recorded in the trace but unused.
+
+**Rationale.** Step A established that retriever scores are not comparable — BM25 is
+unbounded and query-dependent, cosine is bounded in [-1,1], RRF scores live on a third
+scale entirely. Weighting by score would make the aggregator's behaviour silently
+depend on which retriever produced the evidence, which is precisely the kind of hidden
+coupling this architecture exists to prevent. Rank means the same thing everywhere.
+
+**Revisit when.** There is data. The scores are in the trace so the question can be
+settled empirically rather than by argument.
+
+---
+
+## ADR-028 — 2026-08-28 — Similarity yields a support signal only, never a contradiction signal
+
+**Decision.** `support_contra_neutral` maps a similarity-only verdict to
+`((sim+1)/2, None, None)`. Consequently **no aggregator can output `Contradicted` from
+a similarity-only pipeline**, and all five record
+`signal: "similarity_only(no_contradiction_signal)"`.
+
+**Rationale.** Cosine similarity is structurally incapable of detecting contradiction:
+"Marie Curie was born in Warsaw" and "…in Paris" are near-identical strings with high
+similarity. `test_similarity_cannot_tell_support_from_contradiction` demonstrates this
+on the real encoder rather than asserting it.
+
+**Alternatives.** Return `0.0` for contradiction — would let an aggregator conclude "no
+contradiction detected" from a signal that cannot detect one. Refuse to aggregate
+similarity verdicts at all — would make the `similarity` verifier unrunnable end to end,
+hiding the limitation instead of displaying it.
+
+**Revisit when.** A verifier emits both NLI and similarity in one verdict, which is what
+the "is cosine redundant once a cross-encoder sees the pair?" ablation needs.
+
+---
+
+## ADR-029 — 2026-08-28 — Abstain is a separate outcome from Insufficient
+
+**Decision.** `ThresholdWithAbstainAggregator` is the only aggregator that emits four
+labels. `Insufficient` asserts that the evidence was read and does not settle the claim;
+`Abstain` asserts nothing and sets `abstained=True`.
+
+**Rationale.** Only the second belongs on a risk–coverage curve. Collapsing them —
+which every threshold-free aggregator effectively does — makes selective prediction
+unmeasurable, and that is the direction the project's most promising research question
+points.
+
+**Consequence, observed immediately.** On FEVER's NEI examples this aggregator returns
+`Abstain` where gold says `NOT ENOUGH INFO`, so it scores as wrong. **A benchmark with
+no abstain class structurally penalises abstention.** Worth knowing before any
+risk–coverage work; logged as OQ-029.

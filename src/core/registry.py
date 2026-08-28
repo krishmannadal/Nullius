@@ -64,12 +64,11 @@ _REGISTRY: dict[str, dict[str, type[Component]]] = {kind: {} for kind in KINDS}
 #: Modules imported for their registration side effects.  Add a line here when you
 #: add a component module; nothing scans the filesystem.
 _BUILTIN_MODULES: tuple[str, ...] = (
+    "src.components.extractors",
     "src.components.retrievers",
-    # filled in as the rest land (step B of the build order)
-    # "src.components.extractors",
-    # "src.components.rerankers",
-    # "src.components.verifiers",
-    # "src.components.aggregators",
+    "src.components.rerankers",
+    "src.components.verifiers",
+    "src.components.aggregators",
 )
 
 _builtins_loaded = False

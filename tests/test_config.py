@@ -83,3 +83,10 @@ def test_set_global_seed_makes_python_rng_reproducible():
     first = [random.random() for _ in range(3)]
     cfgmod.set_global_seed(7)
     assert [random.random() for _ in range(3)] == first
+
+
+def test_configure_console_is_safe_on_captured_streams():
+    """pytest replaces sys.stdout with a non-reconfigurable capture object; the helper
+    must degrade silently rather than raise."""
+    cfgmod.configure_console()  # must not raise
+    print("smoke: ́ 中文 —")  # combining acute, CJK, em dash

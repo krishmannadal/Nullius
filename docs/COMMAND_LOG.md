@@ -57,3 +57,83 @@ projects may be relying on it.
 
 Downloaded this step: torch cu121 (~2.4 GB) plus the requirements set. No dataset
 downloads; the FEVER wiki dump (~1.7 GB) is gated on OQ-016.
+
+## Step A.2 — git init + FEVER corpus (2026-08-28)
+
+```bash
+git init && git add -A && git commit    # -> 2d5c846; config.git_sha() now returns a real sha
+#   .gitattributes added: * text=auto eol=lf, so corpus/trace JSONL bytes stay stable
+
+# FEVER. The old S3 URLs (s3-eu-west-1.amazonaws.com/fever.public/*) return 403.
+curl -sIL https://fever.ai/download/fever/wiki-pages.zip      # 200, 1,713,485,474 bytes
+curl -L -o data/raw/shared_task_dev.jsonl https://fever.ai/download/fever/shared_task_dev.jsonl
+curl -L -o data/raw/wiki-pages.zip        https://fever.ai/download/fever/wiki-pages.zip
+#   -> 1,713,485,474 bytes, matches Content-Length exactly
+
+# dev-set structure (measured, not assumed)
+#   19,998 rows, exactly 6,666 per class; 2,892 distinct gold pages
+#   11.3% of evidence groups span >1 page (genuine multi-hop)
+
+# zip structure: 218 members = 109 data files + 109 macOS AppleDouble forks
+#   (__MACOSX/wiki-pages/._wiki-NNN.jsonl -- these END IN .jsonl and sort FIRST,
+#    so a naive endswith(".jsonl") filter dies on JSONDecodeError at char 0)
+
+./.venv/Scripts/python.exe -m scripts.build_debug_corpus --n-claims 200 --n-docs 4000 --seed 1337
+```
+
+Measured on the first 3,000 real records: **6,200 of 16,205 sentences are empty
+(38%)**. This is the concrete justification for ADR-019 — filtering empties would have
+shifted the majority of gold sentence indices, silently.
+
+Downloaded this step: 1.72 GB (FEVER). The zip is never extracted; the builder streams
+members out of it, so peak disk stays at the zip.
+
+### Two things the dump taught us (both found by running, not by reading)
+
+**1. `__MACOSX` resource forks.** `wiki-pages.zip` has 218 members: 109 data files and
+109 AppleDouble forks (`__MACOSX/wiki-pages/._wiki-NNN.jsonl`). They end in `.jsonl`,
+they are small binary blobs, and `._` sorts *before* `w` — so `endswith(".jsonl")`
+picks one first and dies with `JSONDecodeError: Expecting value: line 1 column 1`.
+Fixed by `is_real_wiki_member()`, tested.
+
+**2. Windows cp1252 console encoding.** The first build scanned all 5.4 M pages
+successfully and then died inside a `print()`:
+
+```
+UnicodeEncodeError: 'charmap' codec can't encode character '́' in position 56
+```
+
+A Wikipedia page title contains a combining acute accent, which cp1252 cannot encode.
+Four minutes of work lost in a status message. Fixed at the top of the script with
+`sys.stdout.reconfigure(encoding="utf-8", errors="replace")`. This will recur in the
+CLI and in the FastAPI logs; it belongs in a shared helper.
+
+Also noted: the first record of `wiki-001.jsonl` has an empty `id` and no lines —
+`iter_wiki_pages` already skips falsy ids.
+
+### The third thing the dump taught us: FEVER's own files disagree on Unicode
+
+The build's "gold pages absent from the dump" warning fired for exactly one page,
+`Cléopâtre`. Chasing it found a real bug in FEVER itself:
+
+```
+shared_task_dev.jsonl:  b'Cléopâtre'   NFD, decomposed
+wiki-pages.zip:         b'Cl\xe9op\xe2tre'          NFC, precomposed
+exact equal (==)          : False
+equal after NFC normalise : True
+```
+
+Measured over all 2,892 dev gold pages:
+
+```
+not-NFC = 32/2892 = 1.11% of all gold pages
+        = 32/44   = 72.7% of NON-ASCII gold pages
+```
+
+Björk, Curaçao, Café Society, Cléopâtre, Bañuela, 1974 Cypriot coup d'état…
+The 1% aggregate is what makes this dangerous — the loss is not random, it removes
+three quarters of an identifiable slice while looking like rounding error.
+
+Fixed by `normalize_page_id()` at both boundaries (ADR-023) and rebuilt. Note the
+same character caused the cp1252 crash above: the warning that found the bug is the
+warning that could not print it.

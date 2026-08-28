@@ -17,6 +17,7 @@ import json
 import os
 import random
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
@@ -144,6 +145,26 @@ def set_global_seed(seed: int) -> None:
         pass
 
 
+def configure_console() -> None:
+    """Make stdout/stderr UTF-8 safe.  Call this first in any script that prints data.
+
+    Windows consoles default to cp1252, which cannot encode most of what a Wikipedia
+    corpus contains -- combining accents, CJK, and so on.  The failure mode is
+    especially unkind: the program does all its work, then dies inside a ``print()``
+    with ``UnicodeEncodeError: 'charmap' codec can't encode character``.  We lost a
+    full 5.4 M-page scan to exactly this.
+
+    ``errors="replace"`` rather than ``strict``: a status line with a U+FFFD in it is
+    strictly better than losing the run.  Files are always opened with an explicit
+    ``encoding="utf-8"`` elsewhere, so this only affects console output.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, OSError):  # pragma: no cover - captured/non-tty streams
+            pass
+
+
 def project_root() -> Path:
     """Repo root, resolved from this file.  Never hardcode a drive letter."""
     return Path(__file__).resolve().parents[2]
@@ -167,6 +188,7 @@ __all__ = [
     "git_sha",
     "git_is_dirty",
     "set_global_seed",
+    "configure_console",
     "project_root",
     "provenance",
 ]

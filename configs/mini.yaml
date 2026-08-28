@@ -1,0 +1,43 @@
+# =============================================================================
+# MINI HARNESS CONFIG -- the 40-document hand-written corpus.
+#
+# Even more of a toy than configs/debug.yaml. Its purpose is speed: the whole
+# pipeline runs on it in under a second with no FEVER download, so it is what you
+# point at while changing code. It has 40 documents and 115 sentences, written by
+# hand to contain the gold evidence for its own 14 examples.
+#
+# It measures nothing. Nothing it produces is a result.
+# =============================================================================
+
+harness:
+  kind: debug
+  corpus_note: "40 hand-written docs; exists for speed, measures nothing"
+
+seed: 1337
+
+pipeline:
+  k: 5
+
+paths:
+  corpus: data/debug/mini/corpus.jsonl
+  examples: data/debug/mini/examples.jsonl
+  index_dir: data/debug/index
+  results_dir: results
+  failure_cases: results/failure_cases
+
+components:
+  extractor: spacy_sentence
+  retriever:
+    name: hybrid
+    params:
+      corpus_path: data/debug/mini/corpus.jsonl
+      rrf_k: 60
+      candidates_per_arm: 20
+  reranker: noop
+  verifier: nli_deberta
+  aggregator:
+    name: threshold_abstain
+    params:
+      support_floor: 0.5
+      contradict_floor: 0.5
+      abstain_below: 0.4

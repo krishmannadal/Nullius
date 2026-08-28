@@ -41,12 +41,13 @@ duplicate. In that case `check_claims` raises "duplicate claim ids".
 whether a duplicate is an error worth seeing. Tentative: de-duplicate, and record the
 count in `extractor_meta`.
 
-### OQ-005 — No git repo, so `git_sha` is `null` in every trace [needs you]
+### OQ-005 — ~~No git repo~~ RESOLVED 2026-08-28 [closed]
 `C:\Users\krish\Nullius` is not a git repository, so provenance currently rests on
 `config_hash` alone. I did not run `git init` because initialising version control is
 your call, not a side effect of a build step.
-**Settle by:** `git init; git add -A; git commit -m "step 1: core contracts"`. No code
-change needed — `config.git_sha()` starts returning a real sha immediately.
+**Resolved.** `git init` + first commit `2d5c846`. `config.git_sha()` returns a real
+sha with no code change, and `git_is_dirty()` reports alongside it, exactly as ADR-009
+predicted. Provenance is live.
 
 ### OQ-006 — Dependency pins are proposed, not resolved [assumed]
 `requirements.txt` is written from knowledge of what these packages target, and
@@ -127,7 +128,7 @@ download. The FEVER-derived debug corpus is the next artifact and needs a decisi
 **Settle by:** nothing; both corpora coexist. `data/debug/mini/` for tests,
 `data/debug/` for the FEVER-derived one.
 
-### OQ-016 — FEVER ingestion needs the 2017 wiki dump, ~1.7 GB [needs you]
+### OQ-016 — ~~FEVER ingestion~~ RESOLVED 2026-08-28 [closed]
 Gold evidence in FEVER is `(page, sentence_id)` into FEVER's **June 2017** Wikipedia
 snapshot. Fetching current Wikipedia by title instead (~30 MB, no dump) would be much
 cheaper, but current article text has different sentence boundaries, so gold indices
@@ -137,7 +138,9 @@ So the honest options are the dump, or staying on hand-written corpora.
 **Cost:** `wiki-pages.zip` ≈ 1.7 GB download; we extract only the ~3–5k pages we need,
 so the on-disk debug corpus stays small. Disk is currently at 92% (40 GB free), and
 the pip cache alone is ~20 GB — `pip cache purge` would free most of that.
-**Settle by:** say go, and `scripts/build_debug_corpus.py` gets written and run.
+**Resolved: go.** Dump downloaded from `fever.ai` (the old S3 URLs return 403).
+`scripts/build_debug_corpus.py` streams it without extracting. See ADR-018 and
+`docs/data-fever.md`.
 
 ### OQ-017 — `bge-small-en-v1.5` picked arbitrarily [assumed]
 `e5-small-v2` and `all-MiniLM-L6-v2` all fit 6 GB comfortably and are all plausible.
@@ -172,3 +175,29 @@ timing therefore lives in `Trace.timings`, which is written by the pipeline runn
 (step C), not by the retrievers themselves.
 **Settle by:** step C. Tentative keys: `retrieve_ms`, `rerank_ms`, `verify_ms`,
 `aggregate_ms`, all per claim and summed.
+
+### OQ-022 — `--n-docs` counts pages, but sentences are what cost [assumed]
+The debug corpus is specified as ~4,000 *pages*; FEVER pages average tens of sentences,
+so the sentence count (which governs index size, encode time, and BM25 memory) is only
+known after the build. If it lands far above ~150 k sentences, `--n-docs` should come
+down rather than the index design changing.
+**Settle by:** reading `manifest.json → corpus.n_sentences` after the build.
+
+### OQ-023 — Nothing computes the official FEVER score [deferred]
+`meta.evidence_groups` preserves what is needed (label correct AND at least one
+complete evidence group recovered), but no code reads it yet. Recall@k over flattened
+gold is a *different, easier* measure and must not be reported as the FEVER score.
+**Settle by:** whenever evaluation happens — explicitly out of scope for this build.
+
+### OQ-024 — NEI examples have no annotated evidence, so the oracle is empty for them [assumed]
+For a third of the sample, "run with gold evidence substituted" means "run with no
+evidence". That is faithful to FEVER's annotation, and it is also exactly the
+retrieval-failure-vs-genuine-insufficiency boundary: whether the corpus contains
+sentences that *would* settle an NEI claim is unknown and unannotated.
+**Settle by:** it is a research question, not a build decision. Flagged for the backlog.
+
+### OQ-025 — `spacy` still not installed [deferred, blocks step B]
+Adding it to the resolve made pip backtrack >15 min without converging. It is needed
+for `SpacySentenceExtractor`. Step B opens with its own install pass; if it still will
+not co-resolve, the fallback is `spacy.blank("en")` with only the `sentencizer`, which
+needs no model download at the cost of worse boundaries on abbreviations (see OQ-012).

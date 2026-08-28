@@ -191,13 +191,16 @@ Expected: a row number, then `'She was born in Warsaw, in what was then the King
 
 ## 7. Limitations and failure modes
 
-* **The mini corpus is 40 documents and 115 sentences. It measures nothing.** It
-  exists so tests run offline in milliseconds and so every stage can be watched on a
-  real input. Any recall or accuracy computed over it describes the corpus's
-  construction, not a method. The larger debug corpus (a few thousand docs) is the
-  next artifact and is no better in this respect — see `configs/debug.yaml`'s header.
+* **Neither corpus measures anything.** The mini corpus is 40 hand-written documents
+  and 115 sentences; it exists so tests run offline in milliseconds. The FEVER-derived
+  `data/debug/` corpus is ~4,000 pages and ~48,000 sentences, which is large enough to
+  make retrieval non-trivial — but it still contains the gold page for every shipped
+  claim by construction, so recall over it describes its assembly, not a retriever.
+  See `docs/data-fever.md` §7 and `data/debug/manifest.json`, which carries that
+  warning inside the artifact.
 * **The whole corpus is held in memory as Python strings.** At 115 sentences that is
-  nothing; at 25 M FEVER sentences it is roughly 10–15 GB and will not fit in 16 GB.
+  nothing, and at ~48 k it is a few tens of MB; at 25 M FEVER sentences it is roughly
+  10–15 GB and will not fit in 16 GB.
   The full-corpus path needs a memory-mapped or on-disk store, and `Corpus` will need
   an implementation swap behind the same interface. It is written to make that swap
   possible (everything goes through `at()`/`row()`), not to make it unnecessary.

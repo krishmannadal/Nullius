@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.core.config import configure_console  # noqa: E402
 from src.core.types import Label  # noqa: E402
 from src.data.corpus import Corpus, Document  # noqa: E402
 from src.data.examples import Example, label_counts, save_examples, validate_against  # noqa: E402
@@ -540,6 +541,7 @@ def resolve_gold(corpus: Corpus, doc_id: str, needle: str) -> int:
 
 
 def main() -> int:
+    configure_console()
     corpus = Corpus(Document(doc_id=d, title=t, sentences=tuple(s)) for d, t, s in DOCUMENTS)
 
     examples: list[Example] = []

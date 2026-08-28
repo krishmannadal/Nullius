@@ -324,3 +324,131 @@ for a question nobody asked. Both corrupt any mean taken over them, and the corr
 is invisible in the aggregate. `None` forces whatever aggregates to decide in the open.
 
 **Revisit when.** Never. If a future aggregation wants a convention, it states it.
+
+---
+
+## ADR-018 — 2026-08-28 — FEVER's 2017 dump, not live Wikipedia
+
+**Decision.** The debug corpus is built from `wiki-pages.zip` (1.71 GB, FEVER's June
+2017 snapshot), downloaded from `fever.ai`. The `s3-eu-west-1.amazonaws.com/fever.public/*`
+URLs are dead (403).
+
+**Alternative considered and rejected.** Fetch only the ~3–5k needed pages from the
+live Wikipedia API — ~30 MB instead of 1.71 GB, no dump, no streaming.
+
+**Rationale for rejecting it.** Gold evidence is `(page, sentence_id)` into the 2017
+snapshot. Live articles have different sentence boundaries, so indices would have to be
+re-derived by string matching against changed text. That is lossy, and what it corrupts
+is `is_gold` — the single signal the entire retrieved-vs-oracle comparison rests on.
+A 1.7 GB download is far cheaper than an oracle that is quietly wrong.
+
+**Revisit when.** Never for FEVER. A future dataset with stable text addressing could
+be fetched live.
+
+---
+
+## ADR-019 — 2026-08-28 — FEVER `lines` is parsed by declared index, never by position
+
+**Decision.** `parse_lines_field` builds `sentences[i]` by asking for index *i*,
+padding absent indices with `""` and preserving empty sentences. It never uses
+`enumerate`, and records with a non-integer leading field are dropped.
+
+**Alternatives.** Positional enumeration after filtering blank records — shorter, and
+what almost every FEVER preprocessing snippet does.
+
+**Rationale.** Empty sentences are real and they occupy an index. Filtering them shifts
+every later gold key by one; the key still *resolves*, just to the neighbouring
+sentence. `Corpus.fingerprint` cannot catch it (shape is self-consistent) and
+`validate_against` cannot catch it (the key exists). The only defences are an
+index-driven parse and a direct test, so both exist: `tests/test_fever_parse.py` plus a
+build-time tripwire that warns when any gold key lands on an empty sentence.
+
+**Revisit when.** Never. If the dump format changes, `parse_stats.non_integer_index`
+in the manifest spikes and says so.
+
+---
+
+## ADR-020 — 2026-08-28 — Distractors are other claims' gold pages, then uniform random
+
+**Decision.** The distractor pool is (1) gold pages of dev claims *not* in the sample,
+then (2) uniform random pages via single-pass reservoir sampling, to reach `--n-docs`.
+
+**Alternatives.** Uniform random only; hard negatives selected by a retriever; use all
+2,892 dev gold pages.
+
+**Rationale.** Uniform random over 5.4 M pages yields mostly short stubs, so the gold
+page is often the only on-topic document and retrieval becomes trivial. Other claims'
+gold pages are substantive articles and cost nothing extra, and — critically — they are
+**not selected by any retriever**, so the corpus does not become a function of the thing
+being measured. Hard negatives would be the honest way to make retrieval difficult, but
+that circularity is worse than an easy corpus that is labelled easy.
+
+**Consequence, accepted and documented.** The pool contains pages that may genuinely
+bear on our claims without being annotated gold for them, so `is_gold == False` means
+"not annotated for this claim", never "irrelevant".
+
+**Revisit when.** A retrieval experiment needs a genuinely adversarial pool. That is a
+different corpus with a different name, not a tweak to this one.
+
+---
+
+## ADR-021 — 2026-08-28 — Evidence groups are preserved alongside flattened gold
+
+**Decision.** `Example.gold_evidence` is the flattened union of all annotation groups;
+`meta.evidence_groups` keeps the original grouped structure.
+
+**Rationale.** Each FEVER group is a *complete alternative* evidence set, and 11.3% of
+groups span more than one page (measured on dev). Flattening is right for Recall@k and
+wrong for the official FEVER score, which asks whether at least one **complete** group
+was recovered. Flattening alone would destroy that information permanently.
+
+**Revisit when.** The FEVER score gets implemented — the data is already there.
+
+---
+
+## ADR-022 — 2026-08-28 — Claims whose gold does not fully resolve are dropped, and named
+
+**Decision.** If any gold key for a claim is missing from the assembled corpus, the
+claim is excluded and its id recorded in `manifest.json → dropped_claims`.
+
+**Alternatives.** Keep it with partial evidence; keep it and mark it.
+
+**Rationale.** The oracle condition substitutes gold evidence for retrieved evidence.
+A claim with partially-resolvable gold gives a quietly incomplete oracle, which biases
+the retrieved-vs-oracle gap — the central measurement — in an invisible direction.
+Dropping loses a claim; keeping loses the meaning of the measurement.
+
+---
+
+## ADR-023 — 2026-08-28 — Wikipedia page titles are NFC-normalised at every boundary
+
+**Decision.** `normalize_page_id()` applies `unicodedata.normalize("NFC", ...)` to every
+page title entering the system — both from `shared_task_dev.jsonl` and from
+`wiki-pages.zip`.
+
+**Why this is not a hypothetical.** The two FEVER files disagree about normalisation
+for the same title:
+
+```
+shared_task_dev.jsonl:  'Cléopâtre'   NFD, decomposed
+wiki-pages.zip:         'Cl\xe9op\xe2tre'          NFC, precomposed
+```
+
+They render identically and compare unequal, so exact matching drops the page and the
+claim with it. Found by the build's own "gold pages absent from the dump" warning —
+which is also the line that crashed the first run on cp1252, because the character it
+was printing was that combining acute.
+
+**Measured scale over all 2,892 dev gold pages:** 32 are non-NFC. That is **1.1% of all
+gold pages but 72.7% of the 44 non-ASCII gold pages** (Björk, Curaçao, Café Society,
+Cléopâtre, Bañuela, 1974 Cypriot coup d'état, …). The aggregate figure is the dangerous
+part: a 1% loss reads as noise, while what is actually happening is that three quarters
+of an identifiable slice disappears. Any per-slice analysis of non-English entity names
+would have been computed on a quarter of its sample with nothing indicating it.
+
+**Alternatives.** NFD everywhere (would rewrite 5.4 M dump titles instead of 32 dev
+titles); casefold/ASCII-fold matching (over-merges genuinely distinct titles); accept
+the loss (it is biased, so no).
+
+**Revisit when.** Another dataset joins with its own normalisation convention. The fix
+generalises: normalise at the boundary, never at comparison sites.

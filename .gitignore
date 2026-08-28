@@ -9,8 +9,9 @@ results/
 *.faiss
 *.npy
 
-# raw dataset downloads (large, re-fetchable) -- the BUILT debug corpus is small
-# enough to commit, the 1.7 GB dump it came from is not
+# Raw dataset downloads are large and re-fetchable; the BUILT corpus is not.
+# data/debug/{corpus,examples,manifest}.json* ARE committed (4.9 MB total) so the repo
+# is self-contained: clone and the whole pipeline runs without the 1.7 GB FEVER dump.
+# The FAISS index is NOT committed -- it is 74 MB, rebuilds in 39 s, and is keyed by
+# the corpus fingerprint anyway.
 data/raw/
-data/debug/corpus.jsonl
-data/debug/examples.jsonl

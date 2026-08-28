@@ -13,8 +13,11 @@ meaningless as a number — and so is anything downstream of it. Two exist:
 
 * `data/debug/mini/` — 40 hand-written documents, 115 sentences, 14 examples. Checked
   in, offline, milliseconds. This is what the tests run against.
-* `data/debug/` — the FEVER-derived corpus (a few thousand documents). Not built yet;
-  it needs FEVER's 2017 Wikipedia dump (see `docs/OPEN_QUESTIONS.md`, OQ-016).
+* `data/debug/` — FEVER-derived: 200 dev claims (stratified) plus ~4,000 Wikipedia
+  pages, built by `scripts/build_debug_corpus.py` from FEVER's 2017 dump. The gold page
+  for every shipped claim is present **by construction** and the distractor pool is not
+  adversarial, so recall over it is an artifact of its assembly. `data/debug/manifest.json`
+  carries that warning inside the artifact. See `docs/data-fever.md`.
 
 Both are labelled `harness.kind: debug` in the config, and the UI will show a banner.
 Full-corpus indexing is a later problem; see `docs/EXPERIMENT_BACKLOG.md`.
@@ -47,7 +50,7 @@ harness's, so there is one backend, not two.
 | Step | What | State |
 |---|---|---|
 | 1 | `src/core/` — types, interfaces, registry, config | **done** |
-| A | corpus layer + mini corpus + BM25 / dense / hybrid retrievers | **done** |
+| A | corpus layer + mini & FEVER corpora + BM25 / dense / hybrid retrievers | **done** |
 | B | extractors, verifiers, 4 aggregators, 2 null baselines | not started |
 | C | trace writer + CLI end-to-end on 20 examples | not started |
 | D | one FastAPI app: `/analyze`, `/analyze/oracle`, `/verify/quick`, `/verify/full`, `/annotate`, `/health` | not started |
@@ -75,8 +78,12 @@ The core contracts and the corpus layer need only `pyyaml` and `pytest`. BM25 ad
 
 ```powershell
 python -m scripts.build_mini_corpus   # regenerate the offline corpus (already checked in)
-python -m pytest                      # 92 tests; 6 skip without the model stack
-python -m pytest -m slow              # the dense-index tests (downloads bge-small, ~130 MB)
+python -m pytest                      # 119 tests; 6 skip without the model stack
+
+# the FEVER corpus (optional; 1.72 GB download, one streaming pass, several minutes)
+curl -L -o data/raw/shared_task_dev.jsonl https://fever.ai/download/fever/shared_task_dev.jsonl
+curl -L -o data/raw/wiki-pages.zip        https://fever.ai/download/fever/wiki-pages.zip
+python -m scripts.build_debug_corpus --n-claims 200 --n-docs 4000 --seed 1337
 ```
 
 A **skip is not a pass** — `python -m pytest -rs` prints why. All skips mean a missing
@@ -93,8 +100,10 @@ src/data/corpus.py           canonical sentence order + fingerprint (index-align
 src/data/examples.py         labelled examples with gold evidence keys
 src/data/metrics.py          per-example Recall@k, gold ranks (None when gold is empty)
 src/components/retrievers.py BM25, dense (bge-small + FAISS flat), hybrid (RRF)
-scripts/build_mini_corpus.py regenerates the checked-in 40-doc offline corpus
-configs/debug.yaml           the debug harness config (read its header before believing a number)
+scripts/build_mini_corpus.py  regenerates the checked-in 40-doc offline corpus
+scripts/build_debug_corpus.py FEVER -> data/debug/ (streams the 1.7 GB dump, never extracts)
+configs/debug.yaml           FEVER debug harness (read its header before believing a number)
+configs/mini.yaml            the 40-doc corpus; what you point at while changing code
 data/debug/mini/             40 docs, 115 sentences, 14 examples — for tests, measures nothing
 tests/                       contract tests for the silent-bug surfaces
 docs/                        one doc per module + DECISIONS + OPEN_QUESTIONS + EXPERIMENT_BACKLOG

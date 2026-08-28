@@ -1,0 +1,44 @@
+{
+  "built_by": "scripts/build_debug_corpus.py",
+  "harness_kind": "debug",
+  "warning": "Contains the gold evidence page for every example by construction. Distractors are not adversarial. Recall over this corpus is an artifact of its assembly, not a property of a retriever.",
+  "seed": 1337,
+  "n_claims_requested": 200,
+  "n_docs_requested": 4000,
+  "source_dev": "shared_task_dev.jsonl",
+  "source_wiki": "wiki-pages.zip",
+  "corpus": {
+    "n_docs": 3997,
+    "n_sentences": 48119,
+    "sentences_per_doc_mean": 12.038779084313235,
+    "sentences_per_doc_min": 2,
+    "sentences_per_doc_max": 128,
+    "fingerprint": "5390081aebae7b84"
+  },
+  "n_examples": 200,
+  "labels": {
+    "Contradicted": 67,
+    "Supported": 66,
+    "Insufficient": 67
+  },
+  "kinds": {
+    "multi-hop": 20,
+    "single-page": 90,
+    "no-annotated-evidence": 67,
+    "numeric-or-date": 23
+  },
+  "dropped_claims": [],
+  "n_gold_pages": 149,
+  "n_other_gold_pages": 2743,
+  "n_random_pages": 1108,
+  "n_empty_gold_sentences": 0,
+  "parse_stats": {
+    "pages": 5416536,
+    "empty_lines_field": 224,
+    "non_integer_index": 1,
+    "duplicate_index": 0,
+    "padded_gaps": 0,
+    "empty_sentences": 38313,
+    "total_sentences": 105979
+  }
+}

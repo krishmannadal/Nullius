@@ -15,7 +15,10 @@
 
 harness:
   kind: debug                 # "debug" | "eval"  -- the frontend shows a banner when debug
-  corpus_note: "toy corpus containing gold evidence; recall numbers are not meaningful"
+  corpus_note: >-
+    FEVER-derived: ~4000 pages containing the gold page for every shipped example by
+    construction, distractors not adversarial. Recall over it is an artifact of its
+    assembly. Built by scripts/build_debug_corpus.py; see data/debug/manifest.json.
 
 seed: 1337
 
@@ -41,6 +44,7 @@ components:
   retriever:
     name: hybrid
     params:
+      corpus_path: data/debug/corpus.jsonl
       rrf_k: 60               # RRF smoothing constant; see docs/components-retrievers.md
       candidates_per_arm: 50
   reranker: noop              # swap to cross_encoder to turn reranking on

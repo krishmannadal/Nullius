@@ -1,0 +1,7 @@
+# Keep line endings stable across checkouts. The corpus/trace JSONL files are
+# written with newline="\n" and read back by hash-sensitive code; letting git
+# rewrite them to CRLF on checkout would change bytes under artifacts that
+# describe them.
+* text=auto eol=lf
+*.jsonl text eol=lf
+*.py text eol=lf

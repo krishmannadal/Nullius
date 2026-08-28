@@ -1,0 +1,47 @@
+# Pinned dependency set for the debug harness.
+#
+# STATUS: RESOLVED AND INSTALLED (step A, 2026-08-28). requirements.lock.txt holds
+# the full resolved set from `pip freeze` and is the reproducible artifact; this file
+# is the intent. Two corrections were forced by reality and are recorded here:
+#   * pytest 8.1.0 is YANKED upstream (pytest-dev/pytest#12069) -> 8.3.3.
+#   * scikit-learn 1.5.2 was not co-installable with the rest at resolve time; the
+#     installed version is 1.9.0. Pinned to match reality rather than to fiction.
+#   * spacy is NOT installed yet. Adding it to this file made pip's resolver
+#     backtrack for >15 minutes without converging. It is only needed for
+#     SpacySentenceExtractor (step B) and gets its own install pass there, where a
+#     failure to co-resolve is a decision to make rather than a mystery hang.
+#
+# Windows 11 / Python 3.11 / RTX 4050 (6 GB, CUDA 12.x) assumptions:
+#   * torch cu121 wheels, installed from the PyTorch index (see README).
+#   * faiss-cpu, not faiss-gpu: there is no official Windows GPU wheel, and a flat
+#     index over a few thousand sentences is microseconds on CPU. GPU FAISS only
+#     becomes interesting at full-corpus scale, which is out of scope here.
+#   * numpy pinned <2 because the faiss and torch wheels of this era are built
+#     against the 1.x ABI; a numpy 2 upgrade produces import-time crashes that
+#     look like unrelated bugs.
+
+# --- core (needed for build-order step 1; already importable) ---
+pyyaml==6.0.1
+pytest==8.3.3
+
+# --- data / numerics ---
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.9.0
+
+# --- retrieval ---
+rank-bm25==0.2.2
+faiss-cpu==1.8.0.post1
+
+# --- models ---
+# spacy: deferred to step B, see the header note.
+# torch is installed separately, see README (needs the cu121 index URL)
+torch==2.4.1        # installed as 2.4.1+cu121
+transformers==4.44.2
+sentence-transformers==3.0.1
+# --- service + UI ---
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic==2.9.2
+requests==2.32.3
+streamlit==1.38.0

@@ -1,0 +1,111 @@
+# Nullius — a claim-level hallucination-detection *inspection harness*
+
+> *Nullius in verba* — take nobody's word for it. Including this pipeline's.
+
+This repository is a **research instrument**, not a system. Its job is to let you see
+what every stage of a claim-verification pipeline does to a given input, so you can
+find where it fails. Every component is a placeholder behind a clean interface. The
+value is the interfaces and the visibility, not the quality of the defaults.
+
+**Nothing in this repo is tuned, and nothing in it is evaluated.** Every corpus here is
+built to contain the gold evidence for its own examples, so retrieval recall over it is
+meaningless as a number — and so is anything downstream of it. Two exist:
+
+* `data/debug/mini/` — 40 hand-written documents, 115 sentences, 14 examples. Checked
+  in, offline, milliseconds. This is what the tests run against.
+* `data/debug/` — the FEVER-derived corpus (a few thousand documents). Not built yet;
+  it needs FEVER's 2017 Wikipedia dump (see `docs/OPEN_QUESTIONS.md`, OQ-016).
+
+Both are labelled `harness.kind: debug` in the config, and the UI will show a banner.
+Full-corpus indexing is a later problem; see `docs/EXPERIMENT_BACKLOG.md`.
+
+## The pipeline
+
+```
+response text
+  → ClaimExtractor       → list[Claim]
+  → Retriever            → list[Evidence]      (per claim)
+  → Reranker (optional)  → list[Evidence]
+  → Verifier             → EvidenceVerdict     (per claim-evidence PAIR)
+  → Aggregator           → ClaimVerdict        (Supported / Contradicted / Insufficient / Abstain)
+  → Trace                → JSONL
+```
+
+The load-bearing design decision: the **Verifier scores one pair** and the
+**Aggregator is a separate object**. A verifier cannot pool over *k* because its
+signature does not let it see *k*. Aggregation is the slot most likely to become the
+research question, so it is isolated and instrumented from day one — every aggregator
+must write `rule`, `explanation`, and `decisive_evidence_ids` into
+`aggregation_trace`, and the type system enforces it.
+
+## Build status
+
+The original seven-step plan and `docs/CLAUDE_CODE_EXTENSION_PROMPT.md` have been
+merged into one order (ADR-012) — the extension's endpoint set is a superset of the
+harness's, so there is one backend, not two.
+
+| Step | What | State |
+|---|---|---|
+| 1 | `src/core/` — types, interfaces, registry, config | **done** |
+| A | corpus layer + mini corpus + BM25 / dense / hybrid retrievers | **done** |
+| B | extractors, verifiers, 4 aggregators, 2 null baselines | not started |
+| C | trace writer + CLI end-to-end on 20 examples | not started |
+| D | one FastAPI app: `/analyze`, `/analyze/oracle`, `/verify/quick`, `/verify/full`, `/annotate`, `/health` | not started |
+| E | Streamlit inspection harness | not started |
+| F | Chrome MV3 extension (steps 2–6 of its own prompt) | not started |
+| — | `docs/EXPERIMENT_BACKLOG.md` | not started |
+
+E and F are independent once D exists.
+
+## Setup (Windows 11, Python 3.11)
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+# torch first, from the CUDA 12.1 index (the PyPI wheel is CPU-only):
+pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+python -m spacy download en_core_web_sm
+pip freeze > requirements.lock.txt
+```
+
+The core contracts and the corpus layer need only `pyyaml` and `pytest`. BM25 adds
+`rank_bm25`; the dense retriever adds `torch`, `sentence-transformers` and `faiss-cpu`.
+
+```powershell
+python -m scripts.build_mini_corpus   # regenerate the offline corpus (already checked in)
+python -m pytest                      # 92 tests; 6 skip without the model stack
+python -m pytest -m slow              # the dense-index tests (downloads bge-small, ~130 MB)
+```
+
+A **skip is not a pass** — `python -m pytest -rs` prints why. All skips mean a missing
+dependency, never a disabled check.
+
+## Layout
+
+```
+src/core/types.py            frozen dataclasses: Claim, Evidence, EvidenceVerdict, ClaimVerdict, Trace
+src/core/interfaces.py       the five ABCs + runtime contract checks
+src/core/registry.py         YAML name -> component class; what the UI dropdowns read
+src/core/config.py           config load / override / hash, seeding, git provenance
+src/data/corpus.py           canonical sentence order + fingerprint (index-alignment guard)
+src/data/examples.py         labelled examples with gold evidence keys
+src/data/metrics.py          per-example Recall@k, gold ranks (None when gold is empty)
+src/components/retrievers.py BM25, dense (bge-small + FAISS flat), hybrid (RRF)
+scripts/build_mini_corpus.py regenerates the checked-in 40-doc offline corpus
+configs/debug.yaml           the debug harness config (read its header before believing a number)
+data/debug/mini/             40 docs, 115 sentences, 14 examples — for tests, measures nothing
+tests/                       contract tests for the silent-bug surfaces
+docs/                        one doc per module + DECISIONS + OPEN_QUESTIONS + EXPERIMENT_BACKLOG
+results/failure_cases/       where the UI's "save as failure case" button writes
+```
+
+## Documentation contract
+
+Every module gets `docs/<module>.md` with, in order: problem; formal I/O with shapes
+and dtypes; algorithm in pseudocode; a line-by-line walkthrough of only the lines that
+matter; data flow; a runnable test with expected output and failure signature;
+limitations; rejected alternatives. `docs/DECISIONS.md` is an append-only ADR log.
+`docs/OPEN_QUESTIONS.md` lists everything resolved by assumption rather than by
+evidence — read it before trusting any behaviour it names.

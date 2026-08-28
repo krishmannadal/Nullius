@@ -1,0 +1,14 @@
+{"id": "mini-001", "text": "Marie Curie was born in Warsaw.", "gold_label": "Supported", "gold_evidence": [["Marie_Curie", 1]], "dataset": "mini", "meta": {"kind": "lexical-overlap"}}
+{"id": "mini-002", "text": "Marie Curie was born in Paris.", "gold_label": "Contradicted", "gold_evidence": [["Marie_Curie", 1]], "dataset": "mini", "meta": {"kind": "lexical-overlap"}}
+{"id": "mini-003", "text": "Marie Curie won Nobel Prizes in two different scientific fields.", "gold_label": "Supported", "gold_evidence": [["Marie_Curie", 4]], "dataset": "mini", "meta": {"kind": "lexical-overlap"}}
+{"id": "mini-004", "text": "Polonium was named after Poland.", "gold_label": "Supported", "gold_evidence": [["Polonium", 2]], "dataset": "mini", "meta": {"kind": "lexical-overlap"}}
+{"id": "mini-005", "text": "Polonium has atomic number 88.", "gold_label": "Contradicted", "gold_evidence": [["Polonium", 0]], "dataset": "mini", "meta": {"kind": "numeric"}}
+{"id": "mini-006", "text": "Radium was discovered in the final month of 1898.", "gold_label": "Supported", "gold_evidence": [["Radium", 1]], "dataset": "mini", "meta": {"kind": "paraphrase-date"}}
+{"id": "mini-007", "text": "The element that shares its name with a European nation was identified by a married pair of scientists.", "gold_label": "Supported", "gold_evidence": [["Polonium", 2], ["Polonium", 1]], "dataset": "mini", "meta": {"kind": "paraphrase-multi-hop"}}
+{"id": "mini-008", "text": "John Bardeen received the physics Nobel on two separate occasions.", "gold_label": "Supported", "gold_evidence": [["John_Bardeen", 1]], "dataset": "mini", "meta": {"kind": "paraphrase"}}
+{"id": "mini-009", "text": "Pierre Curie died in Warsaw.", "gold_label": "Contradicted", "gold_evidence": [["Pierre_Curie", 3]], "dataset": "mini", "meta": {"kind": "entity-confusion"}}
+{"id": "mini-010", "text": "The Curie temperature of nickel is 358 degrees Celsius.", "gold_label": "Insufficient", "gold_evidence": [], "dataset": "mini", "meta": {"kind": "genuine-insufficiency"}}
+{"id": "mini-011", "text": "Marie Curie's favourite colour was blue.", "gold_label": "Insufficient", "gold_evidence": [], "dataset": "mini", "meta": {"kind": "genuine-insufficiency"}}
+{"id": "mini-012", "text": "Irene Joliot-Curie won a Nobel Prize before her mother did.", "gold_label": "Contradicted", "gold_evidence": [["Irene_Joliot_Curie", 1], ["Marie_Curie", 5]], "dataset": "mini", "meta": {"kind": "numeric-multi-hop"}}
+{"id": "mini-013", "text": "The Eiffel Tower is 330 metres tall and was completed in 1889.", "gold_label": "Supported", "gold_evidence": [["Eiffel_Tower", 3], ["Eiffel_Tower", 2]], "dataset": "mini", "meta": {"kind": "conjunction"}}
+{"id": "mini-014", "text": "Warsaw sits on the Vistula and has around 1.8 million inhabitants.", "gold_label": "Supported", "gold_evidence": [["Warsaw", 1], ["Warsaw", 2]], "dataset": "mini", "meta": {"kind": "conjunction"}}

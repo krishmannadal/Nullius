@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = ["slow: needs model downloads or a GPU"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

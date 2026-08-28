@@ -1,0 +1,53 @@
+# =============================================================================
+# DEBUG HARNESS CONFIG -- NOT AN EVALUATION SETUP.
+#
+# This config runs the pipeline over a few-thousand-document toy corpus that is
+# built to CONTAIN the gold evidence for every example it ships with.  That makes
+# retrieval recall meaningless as a number: the distractor pool is tiny and was
+# not sampled to be adversarial.  Any Recall@k, accuracy, or F1 produced under
+# this config describes the harness, not the method, and must never appear in a
+# results table without the words "debug corpus" next to it.
+#
+# Its purpose is exactly one thing: letting you watch every stage of the pipeline
+# on a real input, fast enough to iterate.  Full-corpus indexing is a later
+# problem (see docs/EXPERIMENT_BACKLOG.md for what is blocked on it).
+# =============================================================================
+
+harness:
+  kind: debug                 # "debug" | "eval"  -- the frontend shows a banner when debug
+  corpus_note: "toy corpus containing gold evidence; recall numbers are not meaningful"
+
+seed: 1337
+
+pipeline:
+  k: 5                        # evidence pieces per claim after rerank
+
+paths:
+  corpus: data/debug/corpus.jsonl
+  examples: data/debug/examples.jsonl
+  index_dir: data/debug/index
+  results_dir: results
+  failure_cases: results/failure_cases
+
+# -----------------------------------------------------------------------------
+# Component selection.  Every value here is a registry name; see
+# `python -m src.cli list-components` for what is registered.
+# NOTE: none of these names are registered yet -- components land in build-order
+# steps 2 and 3.  Building this config today fails loudly with the list of
+# registered names, which is the intended behaviour, not a bug.
+# -----------------------------------------------------------------------------
+components:
+  extractor: spacy_sentence
+  retriever:
+    name: hybrid
+    params:
+      rrf_k: 60               # RRF smoothing constant; see docs/components-retrievers.md
+      candidates_per_arm: 50
+  reranker: noop              # swap to cross_encoder to turn reranking on
+  verifier: nli_deberta
+  aggregator:
+    name: threshold_abstain
+    params:
+      support_floor: 0.5      # PLACEHOLDER, untuned; do not read anything into it
+      contradict_floor: 0.5
+      abstain_below: 0.4

@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+data/debug/index/
+results/
+!results/failure_cases/.gitkeep
+*.faiss
+*.npy
+
+# raw dataset downloads (large, re-fetchable) -- the BUILT debug corpus is small
+# enough to commit, the 1.7 GB dump it came from is not
+data/raw/
+data/debug/corpus.jsonl
+data/debug/examples.jsonl

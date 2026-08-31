@@ -156,7 +156,7 @@ warning that could not print it.
 #   tokenizer.model_max_length = 1000000000000000019884624838656
 #     -> truncation=True ALONE IS A NO-OP; explicit max_length required everywhere
 
-./.venv/Scripts/python.exe -m pytest tests    # 229 passed, 0 skipped
+./.venv/Scripts/python.exe -m pytest tests    # the test suite currently contains >260 passed, 0 skipped
 ```
 
 Known-answer probe confirming the mapping behaves as its names claim:

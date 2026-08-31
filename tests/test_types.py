@@ -286,3 +286,49 @@ def test_oracle_mode_is_recorded():
     base["mode"] = "gold-ish"
     with pytest.raises(ValueError, match="mode must be"):
         Trace.from_dict(base)
+
+
+def test_adversarial_trace_serialization():
+    # Construct an adversarial trace
+    adv_text = "Unicode \u2603\nNew line\r\n\tTabs and empty strings '' \"\" \x1f"
+    claim = Claim.new("resp_adv", adv_text, "adv_extractor", None, {"adv": "\n\0"})
+    ev = Evidence.new("Doc\nID", 0, adv_text, 0.0, "adv_retriever", 1, True, {"meta": {"nested": "value\n"}})
+    
+    # Missing optional probabilities, empty evidence list allowed
+    pair = EvidenceVerdict(claim.id, ev.id, None, None, None, 0.1, "adv_ver", 0.0, 1, 0.0)
+    
+    verdict = ClaimVerdict(
+        claim_id=claim.id,
+        label=Label.ABSTAIN,
+        confidence=0.0,
+        abstained=True,
+        per_evidence=(pair,),
+        aggregator_name="adv_agg",
+        aggregation_trace={
+            "rule": "adv_rule\n",
+            "explanation": "adv_exp",
+            "decisive_evidence_ids": [ev.id, ev.id], # duplicates
+            "nested": {"array": [1, 2, 3]}
+        }
+    )
+    
+    trace = Trace(
+        run_id="run\n1",
+        config_hash="c\th",
+        git_sha="",
+        timestamp="t",
+        response_text=adv_text,
+        claims=(claim,),
+        evidence_by_claim={claim.id: (ev,)},
+        verdicts=(verdict,),
+        timings={},
+        resolved_config={"adv": "config"}
+    )
+    
+    serialized = trace.to_json_line()
+    restored = Trace.from_json_line(serialized)
+    
+    assert restored == trace
+    assert restored.claims[0].text == adv_text
+    assert restored.evidence_by_claim[claim.id][0].text == adv_text
+

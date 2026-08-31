@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .venv_clean/
+.venv_clean_audit/
 .pytest_cache/
 .ruff_cache/
 data/debug/index/

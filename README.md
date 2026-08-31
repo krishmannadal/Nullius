@@ -86,7 +86,7 @@ The core contracts and the corpus layer need only `pyyaml` and `pytest`. BM25 ad
 
 ```powershell
 python -m scripts.build_mini_corpus   # regenerate the offline corpus (already checked in)
-python -m pytest                      # 229 tests, 0 skipped with the full stack
+python -m pytest                      # the test suite currently contains >260 tests, 0 skipped with the full stack
 
 # the FEVER corpus (optional; 1.72 GB download, one streaming pass, several minutes)
 curl -L -o data/raw/shared_task_dev.jsonl https://fever.ai/download/fever/shared_task_dev.jsonl

@@ -313,6 +313,21 @@ def test_oracle_substitutes_gold_evidence_only(stub_registry):
         assert all(e.is_gold for e in evs)
 
 
+def test_standard_inference_cannot_access_gold_data(stub_registry):
+    """Even if an Example with gold labels is provided, 'retrieved' mode must not leak it."""
+    pipe = build()
+    t = analyze(pipe, RESPONSE, ctx_for(pipe), example=EXAMPLE, corpus=CORPUS, mode="retrieved")
+    assert t.mode == "retrieved"
+    # Ensure retriever_name is not oracle
+    for evs in t.evidence_by_claim.values():
+        assert all(e.retriever_name != "oracle" for e in evs)
+        # In retrieved mode, gold flags are added at the end (via mark_gold), 
+        # but the retrieval set itself must be purely from the retriever,
+        # which means it might contain non-gold items.
+        assert not all(e.is_gold for e in evs)
+
+
+
 def test_oracle_and_retrieved_differ_only_in_evidence(stub_registry):
     """The comparison is only meaningful if nothing else changed."""
     pipe = build()

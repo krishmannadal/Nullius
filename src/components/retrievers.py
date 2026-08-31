@@ -27,8 +27,9 @@ from __future__ import annotations
 import functools
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from src.core.config import project_root
 from src.core.interfaces import Retriever
@@ -162,7 +163,7 @@ class DenseRetriever(Retriever):
         index_dir: str = "data/debug/index",
         query_prefix: str = "Represent this sentence for searching relevant passages: ",
         batch_size: int = 64,
-        device: Optional[str] = None,
+        device: str | None = None,
         rebuild: bool = False,
     ) -> None:
         super().__init__()
@@ -228,6 +229,7 @@ class DenseRetriever(Retriever):
             json.dumps(
                 {
                     "corpus_fingerprint": self.corpus.fingerprint(),
+                    "corpus_content_fingerprint": self.corpus.content_fingerprint(),
                     "corpus_path": self.corpus_path,
                     "n_sentences": len(self.corpus),
                     "model_name": self.model_name,
@@ -245,6 +247,7 @@ class DenseRetriever(Retriever):
         """Refuse a stale index rather than returning confidently wrong sentences."""
         checks = [
             ("corpus_fingerprint", self.corpus.fingerprint()),
+            ("corpus_content_fingerprint", self.corpus.content_fingerprint()),
             ("model_name", self.model_name),
             ("dim", self.dim),
             ("n_sentences", len(self.corpus)),
@@ -330,7 +333,7 @@ class HybridRetriever(Retriever):
     def __init__(
         self,
         corpus_path: str,
-        arms: Optional[Sequence[Any]] = None,
+        arms: Sequence[Any] | None = None,
         rrf_k: int = DEFAULT_RRF_K,
         candidates_per_arm: int = 50,
     ) -> None:
@@ -412,10 +415,10 @@ class HybridRetriever(Retriever):
 
 
 __all__ = [
+    "DEFAULT_RRF_K",
     "BM25Retriever",
     "DenseRetriever",
     "HybridRetriever",
     "bm25_tokenize",
     "load_corpus_cached",
-    "DEFAULT_RRF_K",
 ]

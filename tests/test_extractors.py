@@ -17,8 +17,13 @@ from pathlib import Path
 
 import pytest
 
-from src.core.interfaces import ContractError, check_claims, check_evidence_list, check_rerank_is_subset
-from src.core.types import Claim, Evidence
+from src.core.interfaces import (
+    ContractError,
+    check_claims,
+    check_evidence_list,
+    check_rerank_is_subset,
+)
+from src.core.types import Claim, Evidence, SourceSpan
 
 RESPONSE = (
     "Marie Curie was born in Warsaw. She won two Nobel Prizes. "
@@ -251,6 +256,23 @@ def test_noop_on_empty_input():
     from src.components.rerankers import NoOpReranker
 
     assert NoOpReranker().rerank(Claim.new("r", "c", "t"), [], k=5) == []
+
+
+def test_a_claim_with_wrong_span_is_caught():
+    c = Claim.new("r1", "Marie Curie was born in Paris", "ext", SourceSpan(0, 5))
+    with pytest.raises(ContractError, match="does not match the claim text"):
+        check_claims([c], RESPONSE)
+
+
+def test_approximate_span_is_allowed():
+    c = Claim.new(
+        "r1",
+        "approximate match",
+        "ext",
+        SourceSpan(0, 5),
+        extractor_meta={"span_is_exact": False}
+    )
+    check_claims([c], RESPONSE)
 
 
 def test_subset_check_catches_invented_evidence():

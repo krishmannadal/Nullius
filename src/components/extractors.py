@@ -35,7 +35,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Optional
 
 from src.core.config import project_root
 from src.core.interfaces import ClaimExtractor
@@ -164,7 +163,7 @@ class LLMClaimExtractor(ClaimExtractor):
         if not self.cache_path.is_absolute():
             self.cache_path = project_root() / cache_path
         self.cache: dict[str, list[str]] = self._load_cache()
-        self._fallback: Optional[SpacySentenceExtractor] = None
+        self._fallback: SpacySentenceExtractor | None = None
         self._fallback_args = (fallback_model, use_sentencizer)
 
     def _load_cache(self) -> dict[str, list[str]]:
@@ -254,7 +253,7 @@ class LLMClaimExtractor(ClaimExtractor):
         return claims
 
     @staticmethod
-    def _locate(response: str, text: str) -> Optional[SourceSpan]:
+    def _locate(response: str, text: str) -> SourceSpan | None:
         """Best-effort span for a rewritten claim. Exact match first, then word overlap."""
         idx = response.find(text)
         if idx >= 0:
@@ -276,4 +275,4 @@ class LLMClaimExtractor(ClaimExtractor):
         return best_span
 
 
-__all__ = ["SpacySentenceExtractor", "LLMClaimExtractor", "response_id_for", "DEFAULT_CACHE"]
+__all__ = ["DEFAULT_CACHE", "LLMClaimExtractor", "SpacySentenceExtractor", "response_id_for"]

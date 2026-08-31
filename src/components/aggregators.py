@@ -42,7 +42,7 @@ Nothing here is tuned. Every floor is a placeholder and says so.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from src.core.interfaces import Aggregator
 from src.core.registry import register
@@ -59,7 +59,7 @@ def signal_kind(verdicts: Sequence[EvidenceVerdict]) -> str:
 
 def support_contra_neutral(
     v: EvidenceVerdict,
-) -> tuple[float, Optional[float], Optional[float]]:
+) -> tuple[float, float | None, float | None]:
     """One verdict -> (support, contradiction, neutral) signals.
 
     For NLI verdicts these are the three probabilities unchanged. For a
@@ -75,7 +75,7 @@ def support_contra_neutral(
     raise ValueError(f"verdict for {v.evidence_id!r} carries neither NLI probs nor similarity")
 
 
-def _empty_verdict(claim: Claim, aggregator_name: str, extra: Optional[dict] = None) -> ClaimVerdict:
+def _empty_verdict(claim: Claim, aggregator_name: str, extra: dict | None = None) -> ClaimVerdict:
     """The zero-evidence case, identical across aggregators so it is comparable.
 
     Confidence is 0.0, not 1.0: we are maximally unsure, not certainly-insufficient.
@@ -104,7 +104,7 @@ def _empty_verdict(claim: Claim, aggregator_name: str, extra: Optional[dict] = N
     )
 
 
-def _fmt(x: Optional[float]) -> str:
+def _fmt(x: float | None) -> str:
     return "n/a" if x is None else f"{x:.3f}"
 
 
@@ -557,11 +557,11 @@ class MajorityAggregator(Aggregator):
 
 
 __all__ = [
+    "MajorityAggregator",
     "MaxEntailmentAggregator",
     "NoisyOrAggregator",
-    "WeightedByRetrievalAggregator",
     "ThresholdWithAbstainAggregator",
-    "MajorityAggregator",
-    "support_contra_neutral",
+    "WeightedByRetrievalAggregator",
     "signal_kind",
+    "support_contra_neutral",
 ]

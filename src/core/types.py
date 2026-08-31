@@ -25,10 +25,11 @@ import hashlib
 import json
 import math
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Mapping, Optional
+from typing import Any
 
 # Bump when a field is added/removed/retyped.  Saved traces are an error-analysis
 # corpus that will outlive several refactors; the frontend must be able to refuse
@@ -66,7 +67,7 @@ class Label(str, Enum):
     ABSTAIN = "Abstain"
 
     @classmethod
-    def parse(cls, raw: str) -> "Label":
+    def parse(cls, raw: str) -> Label:
         """Map a dataset label string onto our taxonomy.  Strict by design."""
         key = " ".join(str(raw).strip().upper().split())
         try:
@@ -122,12 +123,12 @@ def evidence_id(doc_id: str, sent_id: int) -> str:
 
 
 def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def new_run_id() -> str:
     """Sortable, collision-resistant run id: ``20260828T104500Z-3f9a21``."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"{stamp}-{uuid.uuid4().hex[:6]}"
 
 
@@ -175,7 +176,7 @@ class SourceSpan:
         return {"start": self.start, "end": self.end}
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "SourceSpan":
+    def from_dict(cls, d: Mapping[str, Any]) -> SourceSpan:
         return cls(start=int(d["start"]), end=int(d["end"]))
 
 
@@ -186,7 +187,7 @@ class Claim:
     id: str
     response_id: str
     text: str
-    source_span: Optional[SourceSpan]
+    source_span: SourceSpan | None
     extractor_name: str
     extractor_meta: dict[str, Any] = field(default_factory=dict)
 
@@ -201,9 +202,9 @@ class Claim:
         response_id: str,
         text: str,
         extractor_name: str,
-        source_span: Optional[SourceSpan] = None,
-        extractor_meta: Optional[dict[str, Any]] = None,
-    ) -> "Claim":
+        source_span: SourceSpan | None = None,
+        extractor_meta: dict[str, Any] | None = None,
+    ) -> Claim:
         """Construct with a content-derived id.
 
         The id hashes ``(response_id, span, text)``.  Consequence, and it is the
@@ -221,7 +222,7 @@ class Claim:
             extractor_meta=dict(extractor_meta or {}),
         )
 
-    def edited(self, new_text: str) -> "Claim":
+    def edited(self, new_text: str) -> Claim:
         """Frontend claim-editing: new id, breadcrumb back to the claim it came from."""
         meta = dict(self.extractor_meta)
         meta["edited_from"] = self.id
@@ -245,7 +246,7 @@ class Claim:
         }
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "Claim":
+    def from_dict(cls, d: Mapping[str, Any]) -> Claim:
         span = d.get("source_span")
         return cls(
             id=str(d["id"]),
@@ -272,7 +273,7 @@ class Evidence:
     score: float
     retriever_name: str
     rank: int
-    is_gold: Optional[bool] = None  # None = unknown (unannotated), not "no"
+    is_gold: bool | None = None  # None = unknown (unannotated), not "no"
     #: Per-retriever detail the UI shows in its own column: for a fused result, the
     #: per-arm scores and per-arm ranks that produced `score`. Kept out of `score`
     #: because `score` must stay a single comparable number per retriever, and kept
@@ -303,9 +304,9 @@ class Evidence:
         score: float,
         retriever_name: str,
         rank: int,
-        is_gold: Optional[bool] = None,
-        retriever_meta: Optional[dict[str, Any]] = None,
-    ) -> "Evidence":
+        is_gold: bool | None = None,
+        retriever_meta: dict[str, Any] | None = None,
+    ) -> Evidence:
         return cls(
             id=evidence_id(doc_id, sent_id),
             doc_id=doc_id,
@@ -318,7 +319,7 @@ class Evidence:
             retriever_meta=dict(retriever_meta or {}),
         )
 
-    def reranked(self, *, rank: int, score: float, retriever_name: str) -> "Evidence":
+    def reranked(self, *, rank: int, score: float, retriever_name: str) -> Evidence:
         """Same corpus sentence, new position in a new ordering.  Id is unchanged."""
         return replace(self, rank=int(rank), score=float(score), retriever_name=retriever_name)
 
@@ -336,7 +337,7 @@ class Evidence:
         }
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "Evidence":
+    def from_dict(cls, d: Mapping[str, Any]) -> Evidence:
         return cls(
             id=str(d["id"]),
             doc_id=str(d["doc_id"]),
@@ -367,10 +368,10 @@ class EvidenceVerdict:
 
     claim_id: str
     evidence_id: str
-    p_entail: Optional[float]
-    p_contra: Optional[float]
-    p_neutral: Optional[float]
-    similarity: Optional[float]
+    p_entail: float | None
+    p_contra: float | None
+    p_neutral: float | None
+    similarity: float | None
     verifier_name: str
     latency_ms: float
     #: Denormalised from the Evidence this verdict scores. An Aggregator receives only
@@ -378,8 +379,8 @@ class EvidenceVerdict:
     #: have no way to see rank or retrieval score without being handed the corpus --
     #: which would break its purity. Copying them here keeps the signal inside the
     #: trace, where it is visible, rather than smuggled in through a side channel.
-    evidence_rank: Optional[int] = None
-    evidence_score: Optional[float] = None
+    evidence_rank: int | None = None
+    evidence_score: float | None = None
 
     def __post_init__(self) -> None:
         probs = (self.p_entail, self.p_contra, self.p_neutral)
@@ -428,8 +429,8 @@ class EvidenceVerdict:
         }
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "EvidenceVerdict":
-        def _opt(key: str) -> Optional[float]:
+    def from_dict(cls, d: Mapping[str, Any]) -> EvidenceVerdict:
+        def _opt(key: str) -> float | None:
             v = d.get(key)
             return None if v is None else float(v)
 
@@ -499,7 +500,7 @@ class ClaimVerdict:
         }
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "ClaimVerdict":
+    def from_dict(cls, d: Mapping[str, Any]) -> ClaimVerdict:
         return cls(
             claim_id=str(d["claim_id"]),
             label=Label(d["label"]),
@@ -527,7 +528,7 @@ class Trace:
 
     run_id: str
     config_hash: str
-    git_sha: Optional[str]
+    git_sha: str | None
     timestamp: str
     response_text: str
     claims: tuple[Claim, ...]
@@ -569,7 +570,7 @@ class Trace:
                 return c
         raise KeyError(claim_id)
 
-    def verdict_by_claim(self, claim_id: str) -> Optional[ClaimVerdict]:
+    def verdict_by_claim(self, claim_id: str) -> ClaimVerdict | None:
         for v in self.verdicts:
             if v.claim_id == claim_id:
                 return v
@@ -594,7 +595,7 @@ class Trace:
         }
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "Trace":
+    def from_dict(cls, d: Mapping[str, Any]) -> Trace:
         got = str(d.get("schema_version", "0.0.0"))
         if got.split(".")[0] != SCHEMA_VERSION.split(".")[0]:
             raise ValueError(f"trace schema_version {got} is incompatible with {SCHEMA_VERSION}")
@@ -621,23 +622,23 @@ class Trace:
         return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)
 
     @classmethod
-    def from_json_line(cls, line: str) -> "Trace":
+    def from_json_line(cls, line: str) -> Trace:
         return cls.from_dict(json.loads(line))
 
 
 __all__ = [
-    "SCHEMA_VERSION",
     "PROB_SUM_TOL",
     "REQUIRED_AGGREGATION_TRACE_KEYS",
-    "Label",
-    "SourceSpan",
+    "SCHEMA_VERSION",
     "Claim",
+    "ClaimVerdict",
     "Evidence",
     "EvidenceVerdict",
-    "ClaimVerdict",
+    "Label",
+    "SourceSpan",
     "Trace",
-    "stable_id",
     "evidence_id",
-    "utcnow_iso",
     "new_run_id",
+    "stable_id",
+    "utcnow_iso",
 ]

@@ -34,8 +34,9 @@ from __future__ import annotations
 
 import importlib
 import inspect
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Optional, TypeVar
+from typing import Any, TypeVar
 
 from src.core.interfaces import (
     Aggregator,
@@ -263,7 +264,7 @@ def build_pipeline(cfg: Mapping[str, Any]) -> Pipeline:
     )
 
 
-def _reset_for_tests(kind: Optional[str] = None) -> None:
+def _reset_for_tests(kind: str | None = None) -> None:
     """Clear registrations.  Tests only -- never call this from application code."""
     global _builtins_loaded
     for key in ([kind] if kind else list(KINDS)):
@@ -272,16 +273,16 @@ def _reset_for_tests(kind: Optional[str] = None) -> None:
 
 
 __all__ = [
-    "KINDS",
     "BASE_BY_KIND",
-    "RegistryError",
+    "KINDS",
     "Pipeline",
-    "register",
+    "RegistryError",
     "available",
     "available_all",
-    "get",
     "build",
     "build_pipeline",
+    "get",
     "load_builtins",
     "normalise_spec",
+    "register",
 ]

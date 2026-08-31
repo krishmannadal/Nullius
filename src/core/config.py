@@ -18,8 +18,9 @@ import os
 import random
 import subprocess
 import sys
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any
 
 import yaml
 
@@ -80,7 +81,7 @@ def config_hash(cfg: Mapping[str, Any], length: int = 12) -> str:
     return hashlib.blake2b(canonical_json(cfg).encode("utf-8"), digest_size=16).hexdigest()[:length]
 
 
-def git_sha(repo_root: Optional[Path] = None) -> Optional[str]:
+def git_sha(repo_root: Path | None = None) -> str | None:
     """Current commit sha, or None if this is not a git repo / git is absent.
 
     Returns None rather than raising or faking a value: an honest ``null`` in a
@@ -100,7 +101,7 @@ def git_sha(repo_root: Optional[Path] = None) -> Optional[str]:
     return out.stdout.strip() or None
 
 
-def git_is_dirty(repo_root: Optional[Path] = None) -> Optional[bool]:
+def git_is_dirty(repo_root: Path | None = None) -> bool | None:
     """True if there are uncommitted changes; None if not a git repo."""
     root = Path(repo_root or Path(__file__).resolve().parents[2])
     try:
@@ -181,14 +182,14 @@ def provenance(cfg: Mapping[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
-    "load_config",
     "apply_overrides",
     "canonical_json",
     "config_hash",
-    "git_sha",
-    "git_is_dirty",
-    "set_global_seed",
     "configure_console",
+    "git_is_dirty",
+    "git_sha",
+    "load_config",
     "project_root",
     "provenance",
+    "set_global_seed",
 ]

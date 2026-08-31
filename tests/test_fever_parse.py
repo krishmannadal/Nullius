@@ -13,10 +13,7 @@ answer is obvious by inspection.
 
 from __future__ import annotations
 
-import pytest
-
 from scripts.build_debug_corpus import ParseStats, evidence_groups, parse_lines_field, sample_claims
-
 
 # --------------------------------------------------------------------------- #
 # the alignment invariant

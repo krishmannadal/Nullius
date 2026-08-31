@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
 
 _KEY_SEP = b"\x1f"
 
@@ -79,7 +79,8 @@ class Corpus:
             s.key: row for row, s in enumerate(self.sentences)
         }
         self._doc_by_id: dict[str, Document] = {d.doc_id: d for d in self.documents}
-        self._fingerprint: Optional[str] = None
+        self._fingerprint: str | None = None
+        self._content_fingerprint: str | None = None
 
     # ----------------------------------------------------------------- access
 
@@ -141,10 +142,27 @@ class Corpus:
             self._fingerprint = h.hexdigest()[:16]
         return self._fingerprint
 
+    def content_fingerprint(self) -> str:
+        """Hash of the ordered (doc_id, sent_id, text) tuples.
+
+        Covers the actual wording of every sentence in the corpus.
+        """
+        if getattr(self, "_content_fingerprint", None) is None:
+            h = hashlib.blake2b(digest_size=32)
+            for s in self.sentences:
+                h.update(s.doc_id.encode("utf-8"))
+                h.update(_KEY_SEP)
+                h.update(str(s.sent_id).encode("ascii"))
+                h.update(_KEY_SEP)
+                h.update(s.text.encode("utf-8"))
+                h.update(_KEY_SEP)
+            self._content_fingerprint = h.hexdigest()[:16]
+        return self._content_fingerprint
+
     # ------------------------------------------------------------------- I/O
 
     @classmethod
-    def from_jsonl(cls, path: str | Path) -> "Corpus":
+    def from_jsonl(cls, path: str | Path) -> Corpus:
         p = Path(path)
         if not p.is_file():
             raise FileNotFoundError(
@@ -197,6 +215,7 @@ class Corpus:
             "sentences_per_doc_min": min(lengths) if lengths else 0,
             "sentences_per_doc_max": max(lengths) if lengths else 0,
             "fingerprint": self.fingerprint(),
+            "content_fingerprint": self.content_fingerprint(),
         }
 
     def __repr__(self) -> str:  # pragma: no cover

@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv_clean/
 .pytest_cache/
 .ruff_cache/
 data/debug/index/

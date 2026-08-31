@@ -60,7 +60,7 @@ harness's, so there is one backend, not two.
 | 1 | `src/core/` — types, interfaces, registry, config | **done** |
 | A | corpus layer + mini & FEVER corpora + BM25 / dense / hybrid retrievers | **done** |
 | B | extractors, verifiers, 4 aggregators, 2 null baselines | **done** |
-| C | trace writer + CLI end-to-end on 20 examples | not started |
+| C | trace writer + CLI end-to-end on 20 examples | **done** |
 | D | one FastAPI app: `/analyze`, `/analyze/oracle`, `/verify/quick`, `/verify/full`, `/annotate`, `/health` | not started |
 | E | Streamlit inspection harness | not started |
 | F | Chrome MV3 extension (steps 2–6 of its own prompt) | not started |

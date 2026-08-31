@@ -12,7 +12,6 @@ from src.core import registry
 from src.core.interfaces import Aggregator, ClaimExtractor, Reranker, Retriever, Verifier
 from src.core.types import Claim, ClaimVerdict, Evidence, EvidenceVerdict, Label
 
-
 # --------------------------------------------------------------------------- #
 # fixtures: minimal legal components, registered into a scratch registry
 # --------------------------------------------------------------------------- #

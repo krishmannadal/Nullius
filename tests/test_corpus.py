@@ -90,6 +90,11 @@ def test_fingerprint_ignores_sentence_wording():
         [Document("A", "Doc A", ("TOTALLY DIFFERENT", "a1", "a2")), Document("B", "Doc B", ("b0", "b1"))]
     )
     assert reworded.fingerprint() == toy().fingerprint()
+    assert reworded.content_fingerprint() != toy().content_fingerprint()
+
+
+def test_content_fingerprint_is_stable_across_identical_builds():
+    assert toy().content_fingerprint() == toy().content_fingerprint()
 
 
 # --------------------------------------------------------------------------- #

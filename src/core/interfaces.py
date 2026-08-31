@@ -23,7 +23,8 @@ without re-running the NLI model.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Sequence
+from collections.abc import Sequence
+from typing import Any, ClassVar
 
 from src.core.types import Claim, ClaimVerdict, Evidence, EvidenceVerdict
 
@@ -168,10 +169,16 @@ def check_claims(claims: Sequence[Claim], response: str) -> None:
     if len(set(ids)) != len(ids):
         raise ContractError("ClaimExtractor returned duplicate claim ids")
     for c in claims:
-        if c.source_span is not None and c.source_span.text_from(response) not in response:
-            raise ContractError(
-                f"claim {c.id!r} has a source_span that does not index the response text"
-            )
+        if c.source_span is not None:
+            span_text = c.source_span.text_from(response)
+            if span_text != c.text:
+                if c.extractor_meta.get("span_is_exact") is False:
+                    pass
+                else:
+                    raise ContractError(
+                        f"claim {c.id!r} has a source_span whose text does not match the claim text, "
+                        f"and is not explicitly marked as an approximate span."
+                    )
 
 
 def check_evidence_list(evidence: Sequence[Evidence], k: int, stage: str) -> None:
@@ -203,15 +210,15 @@ def check_pair_verdict(verdict: EvidenceVerdict, claim: Claim, ev: Evidence) -> 
 
 
 __all__ = [
-    "Component",
-    "ClaimExtractor",
-    "Retriever",
-    "Reranker",
-    "Verifier",
     "Aggregator",
+    "ClaimExtractor",
+    "Component",
     "ContractError",
+    "Reranker",
+    "Retriever",
+    "Verifier",
     "check_claims",
     "check_evidence_list",
-    "check_rerank_is_subset",
     "check_pair_verdict",
+    "check_rerank_is_subset",
 ]

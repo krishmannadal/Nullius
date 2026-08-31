@@ -14,9 +14,10 @@ it every time you build a corpus.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any
 
 from src.core.types import Label
 
@@ -37,7 +38,7 @@ class Example:
 
     id: str
     text: str
-    gold_label: Optional[Label]
+    gold_label: Label | None
     gold_evidence: tuple[tuple[str, int], ...]  # (doc_id, sent_id), possibly empty
     dataset: str
     meta: dict[str, Any] = field(default_factory=dict)
@@ -64,7 +65,7 @@ class Example:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Example":
+    def from_dict(cls, d: dict[str, Any]) -> Example:
         gold = d.get("gold_label")
         return cls(
             id=str(d["id"]),
@@ -105,7 +106,7 @@ def save_examples(examples: Iterable[Example], path: str | Path) -> Path:
     return p
 
 
-def validate_against(examples: Iterable[Example], corpus: "Corpus") -> dict[str, Any]:
+def validate_against(examples: Iterable[Example], corpus: Corpus) -> dict[str, Any]:
     """Prove every gold evidence key resolves in this corpus.
 
     A dangling gold key means the oracle condition silently retrieves nothing for
@@ -138,4 +139,4 @@ def label_counts(examples: Iterable[Example]) -> dict[str, int]:
     return counts
 
 
-__all__ = ["Example", "load_examples", "save_examples", "validate_against", "label_counts"]
+__all__ = ["Example", "label_counts", "load_examples", "save_examples", "validate_against"]

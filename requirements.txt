@@ -34,7 +34,10 @@ rank-bm25==0.2.2
 faiss-cpu==1.8.0.post1
 
 # --- models ---
-# spacy: deferred to step B, see the header note.
+# spacy is now required for SpacySentenceExtractor.
+spacy==3.7.5
+# Note: en_core_web_sm requires the direct URL to the explosion release wheel.
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 # torch is installed separately, see README (needs the cu121 index URL)
 torch==2.4.1        # installed as 2.4.1+cu121
 transformers==4.44.2

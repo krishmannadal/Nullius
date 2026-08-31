@@ -41,7 +41,6 @@ never destroys a short claim.
 from __future__ import annotations
 
 import time
-from typing import Any, Optional
 
 from src.core.interfaces import Verifier
 from src.core.registry import register
@@ -57,10 +56,10 @@ def make_verdict(
     *,
     verifier_name: str,
     latency_ms: float,
-    p_entail: Optional[float] = None,
-    p_contra: Optional[float] = None,
-    p_neutral: Optional[float] = None,
-    similarity: Optional[float] = None,
+    p_entail: float | None = None,
+    p_contra: float | None = None,
+    p_neutral: float | None = None,
+    similarity: float | None = None,
 ) -> EvidenceVerdict:
     """Build a verdict, copying the retrieval signal off the Evidence.
 
@@ -130,7 +129,7 @@ class NLIVerifier(Verifier):
         self,
         model_name: str = "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
         max_length: int = DEFAULT_MAX_LENGTH,
-        device: Optional[str] = None,
+        device: str | None = None,
         fp16: bool = True,
     ) -> None:
         super().__init__()
@@ -215,7 +214,7 @@ class SimilarityVerifier(Verifier):
     def __init__(
         self,
         model_name: str = "BAAI/bge-small-en-v1.5",
-        device: Optional[str] = None,
+        device: str | None = None,
         query_prefix: str = "",
     ) -> None:
         super().__init__()
@@ -280,7 +279,7 @@ class ClaimOnlyVerifier(Verifier):
         self,
         model_name: str = "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
         max_length: int = DEFAULT_MAX_LENGTH,
-        device: Optional[str] = None,
+        device: str | None = None,
         fp16: bool = True,
         premise: str = "",
     ) -> None:
@@ -311,9 +310,9 @@ class ClaimOnlyVerifier(Verifier):
 
 
 __all__ = [
+    "DEFAULT_MAX_LENGTH",
+    "ClaimOnlyVerifier",
     "NLIVerifier",
     "SimilarityVerifier",
-    "ClaimOnlyVerifier",
     "make_verdict",
-    "DEFAULT_MAX_LENGTH",
 ]

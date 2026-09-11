@@ -61,10 +61,12 @@ harness's, so there is one backend, not two.
 | A | corpus layer + mini & FEVER corpora + BM25 / dense / hybrid retrievers | **done** |
 | B | extractors, verifiers, 4 aggregators, 2 null baselines | **done** |
 | C | trace writer + CLI end-to-end on 20 examples | **done** |
-| D | one FastAPI app: `/analyze`, `/analyze/oracle`, `/verify/quick`, `/verify/full`, `/annotate`, `/health` | not started |
+| D | one FastAPI app: `/analyze`, `/analyze/oracle`, `/verify/quick`, `/verify/full`, `/annotate`, `/health` | **done** |
 | E | Streamlit inspection harness | not started |
 | F | Chrome MV3 extension (steps 2–6 of its own prompt) | not started |
 | — | `docs/EXPERIMENT_BACKLOG.md` | not started |
+
+FastAPI backend: **implemented**. Streamlit harness: **not implemented**. Chrome MV3 extension: **not implemented**.
 
 E and F are independent once D exists.
 
@@ -112,6 +114,8 @@ src/components/retrievers.py  BM25, dense (bge-small + FAISS flat), hybrid (RRF)
 src/components/rerankers.py   noop, cross-encoder (ms-marco-MiniLM)
 src/components/verifiers.py   NLI (DeBERTa-v3-base), cosine similarity, claim-only NULL
 src/components/aggregators.py max-entailment, noisy-OR, rank-weighted, threshold+abstain, majority NULL
+src/service.py               shared application service layer (CLI + FastAPI execution)
+src/api/                     FastAPI application, routes, and boundary Pydantic schemas
 scripts/build_mini_corpus.py  regenerates the checked-in 40-doc offline corpus
 scripts/build_debug_corpus.py FEVER -> data/debug/ (streams the 1.7 GB dump, never extracts)
 configs/debug.yaml           FEVER debug harness (read its header before believing a number)
@@ -121,6 +125,34 @@ tests/                       contract tests for the silent-bug surfaces
 docs/                        one doc per module + DECISIONS + OPEN_QUESTIONS + EXPERIMENT_BACKLOG
 results/failure_cases/       where the UI's "save as failure case" button writes
 ```
+
+## FastAPI backend
+
+Start the local backend server:
+
+```powershell
+uvicorn src.api.app:app --host 127.0.0.1 --port 8000
+```
+
+Interactive OpenAPI documentation is live at `http://127.0.0.1:8000/docs` and schema at `/openapi.json`.
+
+Endpoints:
+* `GET /health` — runtime diagnostics, device, CUDA availability, VRAM allocation, queue depth, loaded components.
+* `POST /analyze` — standard retrieved pipeline run over response text.
+* `POST /analyze/oracle` — oracle evaluation with gold evidence substitution (strictly isolated from normal inference).
+* `POST /verify/quick` — Tier 1 availability check (extracts claims and queries retrieval; never asserts that a claim is false).
+* `POST /verify/full` — Tier 2 full pipeline execution (supports JSON or Server-Sent Events streaming via `stream=true`).
+* `POST /annotate` — writes a structured annotation record to `data/annotations/annotations.jsonl`.
+
+Example request:
+
+```bash
+curl -X POST http://127.0.0.1:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Marie Curie was born in Warsaw."}'
+```
+
+*Note: Nullius is a research inspection harness, not a production detector.*
 
 ## Documentation contract
 

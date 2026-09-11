@@ -70,11 +70,19 @@ def cmd_list_components(args) -> int:
 
 
 def cmd_analyze(args) -> int:
+    import asyncio
+    from src.service import NulliusService
+
     cfg = _load(args)
     _banner(cfg)
-    pipe = build_pipeline(cfg)
-    ctx = RunContext.create(cfg, pipe)
-    trace = analyze(pipe, args.text, ctx, retrieve_k=args.retrieve_k)
+    service = NulliusService(default_config_path=args.config)
+    trace = asyncio.run(
+        service.analyze(
+            args.text,
+            overrides=args.set,
+            retrieve_k=args.retrieve_k,
+        )
+    )
 
     print(f"\nrun_id      {trace.run_id}")
     print(f"config_hash {trace.config_hash}   git {(trace.git_sha or 'none')[:8]}")

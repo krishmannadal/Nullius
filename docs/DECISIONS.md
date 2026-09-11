@@ -571,3 +571,25 @@ points.
 `Abstain` where gold says `NOT ENOUGH INFO`, so it scores as wrong. **A benchmark with
 no abstain class structurally penalises abstention.** Worth knowing before any
 risk–coverage work; logged as OQ-029.
+
+---
+
+## ADR-030 — 2026-09-08 — Unified FastAPI backend and shared service layer (Step D)
+
+**Decision.** Step D is implemented as one FastAPI application rooted at `src/api/`, backed
+by a shared service layer in `src/service.py` (`NulliusService`). Both the CLI (`src/cli.py`)
+and the API route through this service layer.
+
+Endpoints:
+- `GET /health` — reports runtime diagnostics, device, CUDA/VRAM, queue depth, and loaded components.
+- `POST /analyze` — standard retrieved pipeline verification (`mode="retrieved"`).
+- `POST /analyze/oracle` — oracle verification (`mode="oracle"`), substituting annotated gold evidence.
+- `POST /verify/quick` — Tier 1 availability check (decomposes text, runs retriever, computes availability signal without NLI cross-encoders).
+- `POST /verify/full` — Tier 2 full pipeline execution, supporting both complete JSON and Server-Sent Events (SSE) streaming per-claim verdicts.
+- `POST /annotate` — persists human annotations to `data/annotations/annotations.jsonl` matching the schema in `docs/CLAUDE_CODE_EXTENSION_PROMPT.md` §5.
+
+**Alternatives considered and rejected.**
+- *Separate backend services for harness and extension.* Rejected per ADR-012; would guarantee code drift.
+- *Duplicating orchestration in CLI and routes.* Rejected; extracting `NulliusService` guarantees CLI and API produce identical hashes and traces on identical inputs.
+- *In-memory mutation of model state.* Rejected; verifiers and aggregators remain pure and stateless. A concurrency lock protects 6 GB GPU hardware from concurrent OOMs.
+

@@ -8,6 +8,10 @@ __pycache__/
 data/debug/index/
 results/
 !results/failure_cases/.gitkeep
+data/annotations/*
+!data/annotations/.gitkeep
+implementation_plan.md
+walkthrough.md
 *.faiss
 *.npy
 

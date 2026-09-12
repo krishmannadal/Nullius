@@ -19,8 +19,9 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -37,8 +38,9 @@ from src.core.interfaces import (
     check_evidence_list,
     check_pair_verdict,
     check_rerank_is_subset,
+    Aggregator,
 )
-from src.core.registry import Pipeline, build_pipeline
+from src.core.registry import Pipeline, build_pipeline, build
 from src.core.types import (
     SCHEMA_VERSION,
     Claim,
@@ -52,6 +54,14 @@ from src.data.corpus import Corpus
 from src.data.examples import Example, load_examples
 from src.pipeline import RunContext, _timed, _Timer, analyze, gold_evidence_for
 
+
+@dataclass
+class ExecutionState:
+    run_id: str
+    config_hash: str
+    git_sha: str | None
+    claims_inputs: dict[str, tuple[Claim, list[EvidenceVerdict]]]
+    expires_at: float
 
 def _resolve_repo_path(path_str: str | Path) -> Path:
     p = Path(path_str)
@@ -99,6 +109,10 @@ class NulliusService:
         self._cached_pipeline: Pipeline | None = None
         self._cached_corpus: Corpus | None = None
         self._cached_examples: dict[str, Example] | None = None
+        self._execution_store: dict[str, ExecutionState] = {}
+        self._store_lock = threading.Lock()
+        self._MAX_STORE_SIZE = 50
+        self._STORE_TTL = 3600.0
 
         if preload:
             self._ensure_loaded()
@@ -201,7 +215,7 @@ class NulliusService:
             async with self._lock:
                 cfg, pipe = self._ensure_loaded(config_path, overrides)
                 ctx = RunContext.create(cfg, pipe)
-                return analyze(
+                trace = analyze(
                     pipe,
                     response_text,
                     ctx,
@@ -209,6 +223,7 @@ class NulliusService:
                     check_contracts=check_contracts,
                     mode="retrieved",
                 )
+                return self._store_run(trace)
         finally:
             self._queue_depth -= 1
 
@@ -251,7 +266,7 @@ class NulliusService:
                     raise ValueError(f"Example {target_example.id!r} has no gold evidence annotated")
 
                 ctx = RunContext.create(cfg, pipe)
-                return analyze(
+                trace = analyze(
                     pipe,
                     target_example.text,
                     ctx,
@@ -261,6 +276,7 @@ class NulliusService:
                     retrieve_k=retrieve_k,
                     check_contracts=check_contracts,
                 )
+                return self._store_run(trace)
         finally:
             self._queue_depth -= 1
 
@@ -453,6 +469,38 @@ class NulliusService:
         finally:
             self._queue_depth -= 1
 
+    def _store_run(self, trace: Trace) -> Trace:
+        """Capture the immutable inputs of a pipeline run in the bounded execution store."""
+        # Clean up expired
+        now = time.time()
+        with self._store_lock:
+            expired = [rid for rid, state in self._execution_store.items() if state.expires_at < now]
+            for rid in expired:
+                del self._execution_store[rid]
+
+            # Build inputs map
+            claims_inputs = {}
+            for claim in trace.claims:
+                cv = trace.verdict_by_claim(claim.id)
+                evidence_verdicts = list(cv.per_evidence) if cv else []
+                claims_inputs[claim.id] = (claim, evidence_verdicts)
+
+            # Insert
+            self._execution_store[trace.run_id] = ExecutionState(
+                run_id=trace.run_id,
+                config_hash=trace.config_hash,
+                git_sha=trace.git_sha,
+                claims_inputs=claims_inputs,
+                expires_at=now + self._STORE_TTL
+            )
+
+            # Evict oldest if full
+            if len(self._execution_store) > self._MAX_STORE_SIZE:
+                oldest = min(self._execution_store.values(), key=lambda s: s.expires_at)
+                del self._execution_store[oldest.run_id]
+
+        return trace
+
     def save_annotation(
         self,
         record: Mapping[str, Any],
@@ -498,6 +546,51 @@ class NulliusService:
                 fh.flush()
 
         return annotated_record
+
+    def reaggregate(
+        self,
+        run_id: str,
+        target_aggregators: list[str],
+        aggregator_configs: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Run pure aggregation steps over identical stored verdicts from a previous run.
+        
+        Throws KeyError if run_id is expired or unknown.
+        Throws RegistryError/ValueError for bad aggregator configs.
+        """
+        with self._store_lock:
+            state = self._execution_store.get(run_id)
+            if state is None or state.expires_at < time.time():
+                if state is not None:
+                    del self._execution_store[run_id]
+                raise KeyError(f"Run ID {run_id!r} not found or expired")
+            # Snapshot the state we need
+            claims_inputs = dict(state.claims_inputs)
+            config_hash = state.config_hash
+            git_sha = state.git_sha
+
+        comparisons: dict[str, dict[str, Any]] = {}
+
+        # Instantiate aggregators once
+        aggregators = {}
+        for target in target_aggregators:
+            cfg = aggregator_configs.get(target, {})
+            spec = {"name": target, "params": cfg}
+            aggregators[target] = build("aggregator", spec)
+
+        for claim_id, (claim, verdicts) in claims_inputs.items():
+            comparisons[claim_id] = {}
+            for target, agg_instance in aggregators.items():
+                # Pass identical, immutable data
+                claim_verdict: ClaimVerdict = agg_instance.aggregate(claim, verdicts) # type: ignore[attr-defined]
+                comparisons[claim_id][target] = claim_verdict.to_dict()
+
+        return {
+            "run_id": run_id,
+            "config_hash": config_hash,
+            "git_sha": git_sha,
+            "comparisons": comparisons,
+        }
 
 
 # Singleton instance for application lifecycle

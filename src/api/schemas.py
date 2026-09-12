@@ -190,3 +190,26 @@ class ErrorResponse(BaseModel):
     error: str = Field(..., description="Short error name or classification")
     detail: str = Field(..., description="Explanatory detail for the failure")
     error_type: str = Field(..., description="Exception class or category")
+
+
+class ReaggregateRequest(BaseModel):
+    run_id: str = Field(..., description="The source execution run ID")
+    target_aggregators: list[str] = Field(..., description="List of aggregators to compare")
+    aggregator_configs: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, 
+        description="Optional config per aggregator, keyed by aggregator name"
+    )
+
+
+class ReaggregateResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    
+    run_id: str
+    config_hash: str
+    git_sha: str | None
+    
+    # Nested mapping: claim_id -> aggregator_name -> ClaimVerdictSchema
+    comparisons: dict[str, dict[str, ClaimVerdictSchema]] = Field(
+        ..., description="Comparison results grouped by claim ID and aggregator name"
+    )
+

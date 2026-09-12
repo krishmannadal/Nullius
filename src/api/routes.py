@@ -29,6 +29,8 @@ from src.api.schemas import (
     VerifyFullRequest,
     VerifyQuickRequest,
     VerifyQuickResponse,
+    ReaggregateRequest,
+    ReaggregateResponse,
 )
 from src.core.interfaces import ContractError
 from src.core.registry import RegistryError
@@ -306,4 +308,47 @@ async def annotate_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to persist annotation: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/reaggregate",
+    response_model=ReaggregateResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid aggregator configuration or contract failure"},
+        422: {"model": ErrorResponse, "description": "Validation error in request"},
+    },
+    summary="Stateless Reaggregation",
+    description="Runs a single pure aggregation step over identical materialized verdicts.",
+)
+async def reaggregate_endpoint(
+    req: ReaggregateRequest,
+    service: NulliusService = Depends(get_service),
+) -> ReaggregateResponse:
+    try:
+        resp_dict = service.reaggregate(
+            run_id=req.run_id,
+            target_aggregators=req.target_aggregators,
+            aggregator_configs=req.aggregator_configs,
+        )
+        return ReaggregateResponse(**resp_dict)
+    except (ContractError, RegistryError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Reaggregation contract error: {exc}",
+        ) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Reaggregation failed: {exc}",
         ) from exc

@@ -328,6 +328,77 @@ def test_annotate_missing_fields_fails(client: ASGIClient):
 
 
 # --------------------------------------------------------------------------- #
+# Reaggregate
+# --------------------------------------------------------------------------- #
+
+def test_reaggregate_success_from_analyze(client: ASGIClient):
+    # 1. Run analyze to populate the execution store
+    payload = {"text": "Marie Curie was a physicist."}
+    resp1 = client.post("/analyze", json_body=payload)
+    assert resp1.status_code == 200
+    data1 = resp1.json()
+    run_id = data1["run_id"]
+    claim_id = data1["claims"][0]["id"]
+
+    # 2. Call reaggregate
+    reagg_payload = {
+        "run_id": run_id,
+        "target_aggregators": ["majority", "max_entailment"],
+        "aggregator_configs": {}
+    }
+    resp2 = client.post("/reaggregate", json_body=reagg_payload)
+    if resp2.status_code != 200:
+        print("resp2.text:", resp2.text)
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+
+    assert data2["run_id"] == run_id
+    assert claim_id in data2["comparisons"]
+    comparisons = data2["comparisons"][claim_id]
+    
+    assert "majority" in comparisons
+    assert "max_entailment" in comparisons
+    assert comparisons["majority"]["aggregator_name"] == "majority"
+    assert comparisons["max_entailment"]["aggregator_name"] == "max_entailment"
+
+
+def test_reaggregate_missing_run_id(client: ASGIClient):
+    payload = {
+        "run_id": "nonexistent_run_id_123",
+        "target_aggregators": ["majority"],
+    }
+    resp = client.post("/reaggregate", json_body=payload)
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"].lower()
+
+
+def test_reaggregate_invalid_aggregator(client: ASGIClient):
+    # Need a valid run_id first
+    resp1 = client.post("/analyze", json_body={"text": "Marie Curie."})
+    run_id = resp1.json()["run_id"]
+
+    payload = {
+        "run_id": run_id,
+        "target_aggregators": ["unknown_aggregator_999"],
+    }
+    resp2 = client.post("/reaggregate", json_body=payload)
+    if resp2.status_code != 400:
+        print("resp2.text:", resp2.text)
+    assert resp2.status_code == 400
+    assert "no aggregator named" in resp2.json()["detail"].lower()
+
+
+def test_reaggregate_validation_error(client: ASGIClient):
+    # Missing required field
+    payload = {
+        "run_id": "123",
+        # missing target_aggregators
+    }
+    resp = client.post("/reaggregate", json_body=payload)
+    assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------------- #
 # OpenAPI Schema
 # --------------------------------------------------------------------------- #
 
@@ -336,5 +407,5 @@ def test_openapi_schema(client: ASGIClient):
     assert resp.status_code == 200, resp.text
     schema = resp.json()
     paths = schema.get("paths", {})
-    for ep in ("/health", "/analyze", "/analyze/oracle", "/verify/quick", "/verify/full", "/annotate"):
+    for ep in ("/health", "/analyze", "/analyze/oracle", "/verify/quick", "/verify/full", "/annotate", "/reaggregate"):
         assert ep in paths, f"Endpoint {ep} missing from OpenAPI paths"

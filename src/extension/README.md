@@ -3,7 +3,8 @@
 A Chrome Manifest V3 extension for inspecting the latest completed answer on
 `chatgpt.com` (also recognizes `chat.openai.com`). It shows results in its popup.
 The extension captures text only after you open it. Only clicking **Quick Check**
-or **Full Inspection** sends that text to the local backend. It does not edit the
+or **Full Inspection** sends that text to the local backend. **Compare rules**
+sends only the stored run ID and rule settings; exports stay on your computer. It does not edit the
 ChatGPT page or run in the background.
 
 ## Run the backend on your own computer
@@ -81,6 +82,42 @@ It cannot settle arbitrary ChatGPT answers about current events or other uncover
 topics. A missing hit or an Abstain verdict does not establish a hallucination.
 No scientific accuracy is claimed.
 
+## Compare rules without rerunning the model
+
+After Full Inspection succeeds, click **Compare rules · no new inference**.
+Nullius compares five backend rules on the exact pairwise scores already stored
+for this inspection: max entailment, noisy OR, rank weighting, threshold with
+abstention, and the majority baseline. The original verdict and all evidence
+remain visible. A table shows each rule's verdict and uncalibrated confidence;
+expand a rule to inspect its rationale and decisive evidence IDs.
+
+The count of claims receiving different verdicts describes **decision sensitivity**,
+not hallucination accuracy. Agreement does not prove truth. Comparisons use rule
+defaults and do not tune thresholds. No extraction, retrieval or NLI pass runs
+again. The browser sends no pairwise scores and rejects a comparison whose run
+ID, config hash, Git commit or pairwise inputs differ from the original.
+
+The backend keeps at most 50 runs for up to one hour. Restarting the backend,
+expiry or eviction can make a run unavailable. Export the inspection while it is
+visible, then run Full Inspection again to create a new comparison-capable run.
+Quick Check has no verifier scores, so its rule-comparison button stays disabled.
+
+## Export an inspection for research review
+
+Click **Export inspection JSON** after either kind of check. The download keeps:
+
+- The exact captured answer and the original, unmodified backend result.
+- Original run ID, configuration hash, Git commit, timestamp, resolved configuration,
+  evidence and pairwise scores when returned by Full Inspection.
+- Validated rule comparisons and their requested settings, when available.
+- Export timestamp, extension version and a research-use notice.
+
+An export is an inspection snapshot, not human annotation, adjudicated gold or
+evaluation metrics. It includes the captured answer, so review its content before
+sharing. Nothing is uploaded by the export action. **Refresh response** or a new
+check clears the previous inspection and comparison to prevent stale exports.
+Closing the popup loses local state; download your inspection before closing.
+
 ## Troubleshooting and manual smoke test
 
 - **No answer found:** open a conversation containing an assistant answer, reload
@@ -98,7 +135,8 @@ No scientific accuracy is claimed.
 On your real Chrome profile, check a completed ChatGPT answer, start another answer
 while the popup is open and confirm streaming is blocked, then refresh after it
 finishes. Confirm the new text appears in the preview. Try both checks; compare
-the full evidence IDs and scores with the backend. Stop the backend and confirm
+the full evidence IDs and scores with the backend. Then compare rules and export
+the JSON, checking that the run IDs and pairwise scores remain identical. Stop the backend and confirm
 Test connection displays an error. Never use these smoke checks as scientific
 benchmark results.
 

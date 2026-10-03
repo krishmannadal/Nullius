@@ -158,6 +158,8 @@ curl -X POST http://127.0.0.1:8000/analyze \
 
 The Manifest V3 extension lives in `src/extension`. It captures the latest
 completed ChatGPT answer and offers Quick Check and Full Inspection in its popup.
+After Full Inspection, compare five aggregation rules on the same stored scores
+without running the model again, then export the complete inspection JSON.
 Start its local backend with `python -m scripts.run_extension_backend --warm-full`,
 then load `src/extension` through Chrome's **Load unpacked** action.
 

@@ -4,6 +4,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const fullBtn = document.getElementById('full-btn');
   const refreshBtn = document.getElementById('refresh-btn');
   const connectionBtn = document.getElementById('connection-btn');
+  const compareBtn = document.getElementById('compare-btn');
+  const exportBtn = document.getElementById('export-btn');
+  const comparisonArea = document.getElementById('comparison-area');
   const statusArea = document.getElementById('status-area');
   const resultsArea = document.getElementById('results-area');
   const endpoints = {
@@ -13,6 +16,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const timeouts = { quick: 5000, full: 60000 };
   let capturedText = null;
   let busy = false;
+  let inspection = null;
+  let comparison = null;
+  let comparisonExpired = false;
+  const rules = ['max_entailment', 'noisy_or', 'weighted_by_retrieval', 'threshold_abstain', 'majority'];
+  const ruleNames = {
+    max_entailment: 'Max entailment', noisy_or: 'Noisy OR',
+    weighted_by_retrieval: 'Rank weighted', threshold_abstain: 'Threshold + abstain',
+    majority: 'Majority baseline'
+  };
 
   function showStatus(msg, isError = false) {
     statusArea.style.display = 'block';
@@ -26,6 +38,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     fullBtn.disabled = value || !capturedText;
     refreshBtn.disabled = value;
     connectionBtn.disabled = value;
+    compareBtn.disabled = value || comparisonExpired || inspection?.kind !== 'full' ||
+      !inspection.data.run_id || !inspection.data.config_hash || !inspection.data.claims.length;
+    exportBtn.disabled = value || !inspection;
+  }
+
+  function clearInspection() {
+    inspection = null;
+    comparison = null;
+    comparisonExpired = false;
+    comparisonArea.replaceChildren();
+    resultsArea.replaceChildren();
   }
 
   async function captureLatest() {
@@ -46,7 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function refresh() {
     if (busy) return;
     setBusy(true);
-    resultsArea.replaceChildren();
+    clearInspection();
     statusArea.style.display = 'none';
     try {
       await captureLatest();
@@ -62,7 +85,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function inspect(kind) {
     if (busy) return;
     setBusy(true);
-    resultsArea.replaceChildren();
+    clearInspection();
     showStatus(kind === 'quick' ? 'Checking evidence availability…' : 'Inspecting claims and evidence…');
     const button = kind === 'quick' ? quickBtn : fullBtn;
     button.textContent = kind === 'quick' ? 'Checking…' : 'Inspecting…';
@@ -92,12 +115,14 @@ document.addEventListener('DOMContentLoaded', async () => {
           (kind === 'full' && (!Array.isArray(data.verdicts) || !data.evidence_by_claim))) {
         throw new Error('Backend returned an invalid inspection response. Update and restart Nullius.');
       }
+      inspection = { kind, captured_text: text, data };
       if (kind === 'quick') renderQuickResults(data);
       else renderFullResults(data);
       showStatus(kind === 'quick' ?
         'Quick Check reports evidence availability. A missing hit does not mean a claim is false.' :
         'Inspection complete for the response shown above. Scores are uncalibrated research outputs.');
     } catch (error) {
+      clearInspection();
       if (stage === 'capture') {
         capturedText = null;
         previewBox.textContent = error.message;
@@ -115,6 +140,143 @@ document.addEventListener('DOMContentLoaded', async () => {
       setBusy(false);
     }
   }
+
+  function validateComparison(data) {
+    if (!data || data.run_id !== inspection.data.run_id ||
+        data.config_hash !== inspection.data.config_hash ||
+        (data.git_sha ?? null) !== (inspection.data.git_sha ?? null) ||
+        !data.comparisons || typeof data.comparisons !== 'object') {
+      throw new Error('Rule comparison does not match this inspection. Run Full Inspection again.');
+    }
+    const ids = inspection.data.claims.map(claim => claim.id);
+    if (Object.keys(data.comparisons).length !== ids.length) {
+      throw new Error('Backend returned an incomplete rule comparison.');
+    }
+    for (const id of ids) {
+      for (const rule of rules) {
+        const verdict = data.comparisons[id]?.[rule];
+        if (!verdict || verdict.claim_id !== id || verdict.aggregator_name !== rule ||
+            !['Supported', 'Contradicted', 'Insufficient', 'Abstain'].includes(verdict.label) ||
+            !Number.isFinite(verdict.confidence) || verdict.confidence < 0 || verdict.confidence > 1 ||
+            !Array.isArray(verdict.per_evidence) || !verdict.aggregation_trace ||
+            !Array.isArray(verdict.aggregation_trace.decisive_evidence_ids) ||
+            typeof verdict.aggregation_trace.rule !== 'string' ||
+            typeof verdict.aggregation_trace.explanation !== 'string') {
+          throw new Error('Backend returned an incomplete rule comparison.');
+        }
+        const original = inspection.data.verdicts.find(item => item.claim_id === id);
+        const canonicalPair = pair => JSON.stringify(Object.entries(pair).sort(([a], [b]) => a.localeCompare(b)));
+        if (!original || verdict.per_evidence.length !== original.per_evidence.length ||
+            verdict.per_evidence.some((pair, index) => canonicalPair(pair) !== canonicalPair(original.per_evidence[index]))) {
+          throw new Error('Comparison scores differ from the original inspection; the response was rejected.');
+        }
+      }
+    }
+  }
+
+  function renderComparison(data) {
+    comparisonArea.replaceChildren();
+    const title = document.createElement('h2');
+    title.textContent = 'Same evidence · different rules';
+    comparisonArea.appendChild(title);
+    const changed = inspection.data.claims.filter(claim =>
+      new Set(rules.map(rule => data.comparisons[claim.id][rule].label)).size > 1
+    ).length;
+    const notice = document.createElement('p');
+    notice.className = 'notice';
+    notice.textContent = `${changed} of ${inspection.data.claims.length} claims receive different verdicts across these rule defaults. ` +
+      'Every rule uses the same stored pairwise scores. Disagreement shows decision sensitivity; agreement does not prove truth.';
+    comparisonArea.appendChild(notice);
+    for (const claim of inspection.data.claims) {
+      const card = document.createElement('section');
+      card.className = 'claim-card';
+      const claimText = document.createElement('p');
+      claimText.className = 'claim-text';
+      claimText.textContent = claim.text;
+      card.appendChild(claimText);
+      const table = document.createElement('table');
+      const caption = document.createElement('caption');
+      caption.textContent = 'Default rule settings; confidence is uncalibrated';
+      table.appendChild(caption);
+      const header = document.createElement('tr');
+      for (const label of ['Rule', 'Verdict', 'Confidence']) {
+        const cell = document.createElement('th');
+        cell.scope = 'col'; cell.textContent = label; header.appendChild(cell);
+      }
+      const head = document.createElement('thead'); head.appendChild(header); table.appendChild(head);
+      const body = document.createElement('tbody');
+      for (const rule of rules) {
+        const verdict = data.comparisons[claim.id][rule];
+        const row = document.createElement('tr');
+        for (const value of [ruleNames[rule], verdict.label, verdict.confidence.toFixed(3)]) {
+          const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell);
+        }
+        body.appendChild(row);
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = `${ruleNames[rule]} · rationale and decisive evidence`;
+        const trace = document.createElement('pre');
+        trace.textContent = JSON.stringify(verdict.aggregation_trace, null, 2);
+        details.append(summary, trace); card.appendChild(details);
+      }
+      table.appendChild(body); card.insertBefore(table, card.children[1] || null);
+      comparisonArea.appendChild(card);
+    }
+  }
+
+  compareBtn.addEventListener('click', async () => {
+    if (busy || compareBtn.disabled) return;
+    setBusy(true);
+    showStatus('Comparing five rules on this inspection’s stored scores…');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch('http://127.0.0.1:8000/reaggregate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        // Never send client-supplied scores or a second copy of the response.
+        body: JSON.stringify({ run_id: inspection.data.run_id, target_aggregators: rules, aggregator_configs: {} }),
+        signal: controller.signal
+      });
+      if (response.status === 404) {
+        comparisonExpired = true;
+        throw new Error('This inspection expired or the backend restarted. Export your results, then run Full Inspection again.');
+      }
+      if (!response.ok) throw new Error(`Rule comparison failed (${response.status}). Your original inspection is preserved.`);
+      const data = await response.json();
+      validateComparison(data);
+      renderComparison(data);
+      comparison = data;
+      showStatus('Five rules compared on the same scores. No extraction, retrieval or model inference was repeated.');
+    } catch (error) {
+      showStatus(error.name === 'AbortError' ? 'Rule comparison timed out. Your inspection is preserved; retry when the backend is available.' : error.message, true);
+    } finally {
+      clearTimeout(timer);
+      setBusy(false);
+    }
+  });
+
+  exportBtn.addEventListener('click', () => {
+    if (busy || !inspection) return;
+    const report = {
+      schema_version: 'nullius-inspection-export-v1',
+      exported_at: new Date().toISOString(),
+      extension_version: chrome.runtime?.getManifest?.()?.version || 'unknown',
+      inspection_kind: inspection.kind,
+      captured_text: inspection.captured_text,
+      original_result: inspection.data,
+      comparison_request: comparison ? { target_aggregators: rules, aggregator_configs: {} } : null,
+      rule_comparison: comparison,
+      notice: 'Research inspection over a limited debug corpus. Scores are uncalibrated; this is not adjudicated gold or scientific validation.'
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `nullius-${inspection.kind}-inspection.json`;
+    anchor.hidden = true;
+    document.body.appendChild(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showStatus('Inspection exported locally. The file contains the captured answer; share it only when appropriate.');
+  });
 
   refreshBtn.addEventListener('click', refresh);
   quickBtn.addEventListener('click', () => inspect('quick'));

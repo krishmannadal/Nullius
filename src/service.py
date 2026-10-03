@@ -64,7 +64,7 @@ class ExecutionState:
     run_id: str
     config_hash: str
     git_sha: str | None
-    claims_inputs: dict[str, tuple[Claim, list[EvidenceVerdict]]]
+    claims_inputs: dict[str, tuple[Claim, tuple[EvidenceVerdict, ...]]]
     expires_at: float
     trace: Trace
 
@@ -524,7 +524,7 @@ class NulliusService:
             claims_inputs = {}
             for claim in trace.claims:
                 cv = trace.verdict_by_claim(claim.id)
-                evidence_verdicts = list(cv.per_evidence) if cv else []
+                evidence_verdicts = tuple(cv.per_evidence) if cv else ()
                 claims_inputs[claim.id] = (claim, evidence_verdicts)
 
             # Insert
@@ -624,7 +624,9 @@ class NulliusService:
             comparisons[claim_id] = {}
             for target, agg_instance in aggregators.items():
                 # Pass identical, immutable data
-                claim_verdict: ClaimVerdict = agg_instance.aggregate(claim, verdicts) # type: ignore[attr-defined]
+                # Give each rule its own list; a rule cannot reorder or clear the stored
+                # inputs seen by another rule. Individual pairwise records are frozen.
+                claim_verdict: ClaimVerdict = agg_instance.aggregate(claim, list(verdicts)) # type: ignore[attr-defined]
                 comparisons[claim_id][target] = claim_verdict.to_dict()
 
         return {

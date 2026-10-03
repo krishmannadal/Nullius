@@ -62,11 +62,11 @@ harness's, so there is one backend, not two.
 | B | extractors, verifiers, 4 aggregators, 2 null baselines | **done** |
 | C | trace writer + CLI end-to-end on 20 examples | **done** |
 | D | one FastAPI app: `/analyze`, `/analyze/oracle`, `/verify/quick`, `/verify/full`, `/annotate`, `/health` | **done** |
-| E | Streamlit inspection harness | not started |
-| F | Chrome MV3 extension (steps 2–6 of its own prompt) | not started |
+| E | Streamlit inspection harness | **implemented** |
+| F | Chrome MV3 extension for ChatGPT: Quick Check, Full Inspection, evidence traceability | **implemented** |
 | — | `docs/EXPERIMENT_BACKLOG.md` | not started |
 
-FastAPI backend: **implemented**. Streamlit harness: **not implemented**. Chrome MV3 extension: **not implemented**.
+FastAPI backend, Streamlit harness, and Chrome MV3 extension: **implemented**. The extension requires a local backend and uses a limited debug corpus; scientific evaluation remains separate.
 
 E and F are independent once D exists.
 
@@ -153,6 +153,17 @@ curl -X POST http://127.0.0.1:8000/analyze \
 ```
 
 *Note: Nullius is a research inspection harness, not a production detector.*
+
+## Chrome extension for ChatGPT
+
+The Manifest V3 extension lives in `src/extension`. It captures the latest
+completed ChatGPT answer and offers Quick Check and Full Inspection in its popup.
+Start its local backend with `python -m scripts.run_extension_backend --warm-full`,
+then load `src/extension` through Chrome's **Load unpacked** action.
+
+See [Chrome installation and troubleshooting](src/extension/README.md) for the
+complete steps. The extension uses a limited debug corpus; missing evidence is
+not proof of a false claim.
 
 ## Documentation contract
 

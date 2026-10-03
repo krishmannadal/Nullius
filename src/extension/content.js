@@ -1,44 +1,41 @@
-function captureResponse() {
-  // ChatGPT adapter logic
-  const assistantNodes = document.querySelectorAll('div[data-message-author-role="assistant"]');
-  if (!assistantNodes || assistantNodes.length === 0) {
-    return { success: false, error: "No assistant response found on page. Make sure you are on a ChatGPT conversation." };
-  }
+(() => {
+  // Popup reopening must not install duplicate message listeners.
+  if (globalThis.__nulliusCaptureV2Installed) return;
+  globalThis.__nulliusCaptureV2Installed = true;
 
-  // Get the most recent response (last in the DOM)
-  const lastNode = assistantNodes[assistantNodes.length - 1];
-  
-  // Conservative guard against incomplete/streaming response
-  // Checks for ChatGPT's streaming class or active stop button
-  const isStreaming = lastNode.classList.contains('result-streaming') || 
-                      lastNode.querySelector('.result-streaming') !== null ||
-                      document.querySelector('button[aria-label="Stop generating"]') !== null;
-                      
-  if (isStreaming) {
-    return { success: false, error: "Response is still generating. Please wait until it is complete." };
-  }
-  
-  // Try to find the markdown container to avoid capturing internal UI text, or fallback to the node itself
-  const markdownNode = lastNode.querySelector('.markdown') || lastNode;
-  
-  const text = markdownNode.innerText || markdownNode.textContent;
-  if (!text || text.trim().length === 0) {
-    return { success: false, error: "Assistant response is empty." };
-  }
-
-  return { success: true, text: text.trim() };
-}
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === "CAPTURE_RESPONSE") {
-    try {
-      const result = captureResponse();
-      sendResponse(result);
-    } catch (e) {
-      sendResponse({ success: false, error: e.message });
+  function captureResponse() {
+    if (!['chatgpt.com', 'chat.openai.com'].includes(location.hostname)) {
+      return { success: false, error: 'Open a conversation on chatgpt.com first.' };
     }
+    const assistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
+      .filter(node => node.getClientRects().length > 0);
+    const lastNode = assistantNodes.at(-1);
+    if (!lastNode) {
+      return { success: false, error: 'No assistant response found. Open a ChatGPT conversation with a completed answer.' };
+    }
+    const stopButtons = document.querySelectorAll(
+      'button[data-testid="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop streaming"]'
+    );
+    const activeStop = [...stopButtons].some(button => !button.disabled && button.getClientRects().length > 0);
+    if (activeStop || lastNode.closest('.result-streaming') || lastNode.querySelector('.result-streaming')) {
+      return { success: false, error: 'ChatGPT is still generating. Wait, then click Refresh response.' };
+    }
+    // Prefer answer bodies over action buttons. Keep multiple answer blocks in order.
+    const markdownNodes = lastNode.matches('.markdown') ? [lastNode] :
+      [...lastNode.querySelectorAll('.markdown')].filter(node => !node.parentElement.closest('.markdown'));
+    const bodies = markdownNodes.length ? markdownNodes : [lastNode];
+    const text = bodies.map(node => node.innerText || node.textContent || '').join('\n\n').trim();
+    if (!text) return { success: false, error: 'The latest assistant response is empty.' };
+    return { success: true, text };
   }
-  // Return true to indicate we will send a response asynchronously (though we send it synchronously here)
-  // This prevents the message port from closing immediately if we needed async.
-  return true; 
-});
+
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type !== 'CAPTURE_RESPONSE') return false;
+    try {
+      sendResponse(captureResponse());
+    } catch (error) {
+      sendResponse({ success: false, error: error.message });
+    }
+    return false;
+  });
+})();

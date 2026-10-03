@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Nullius Inspection Harness",
-  "version": "1.0.0",
-  "description": "Research inspection instrument. Flags claim-level hallucination states.",
+  "version": "1.1.0",
+  "description": "Inspect claims and evidence in completed ChatGPT answers using a local Nullius research backend.",
   "permissions": [
     "activeTab",
     "scripting"

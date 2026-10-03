@@ -21,8 +21,7 @@ import json
 import threading
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,9 +37,14 @@ from src.core.interfaces import (
     check_evidence_list,
     check_pair_verdict,
     check_rerank_is_subset,
-    Aggregator,
 )
-from src.core.registry import Pipeline, build_pipeline, build
+from src.core.registry import Pipeline, build, build_pipeline, load_builtins
+from src.core.trace_io import (
+    ALLOWED_FAILURE_CATEGORIES,
+)
+from src.core.trace_io import (
+    save_failure_case as save_failure_case_file,
+)
 from src.core.types import (
     SCHEMA_VERSION,
     Claim,
@@ -50,13 +54,9 @@ from src.core.types import (
     Trace,
     utcnow_iso,
 )
-from src.core.trace_io import (
-    ALLOWED_FAILURE_CATEGORIES,
-    save_failure_case as save_failure_case_file,
-)
 from src.data.corpus import Corpus
 from src.data.examples import Example, load_examples
-from src.pipeline import RunContext, _timed, _Timer, analyze, gold_evidence_for
+from src.pipeline import RunContext, _timed, _Timer, analyze
 
 
 @dataclass
@@ -113,6 +113,7 @@ class NulliusService:
         self._queue_depth = 0
         self._cached_config: dict[str, Any] | None = None
         self._cached_pipeline: Pipeline | None = None
+        self._quick_cache: dict[str, tuple[Any, Any]] = {}
         self._cached_corpus: Corpus | None = None
         self._cached_examples: dict[str, Example] | None = None
         self._execution_store: dict[str, ExecutionState] = {}
@@ -145,15 +146,16 @@ class NulliusService:
         overrides: Sequence[str] | None = None,
     ) -> tuple[dict[str, Any], Pipeline]:
         with self._thread_lock:
+            uses_default = config_path is None or str(config_path) == self.default_config_path
             # If default config without overrides is requested and cached, return it
-            if config_path is None and not overrides and self._cached_config is not None and self._cached_pipeline is not None:
+            if uses_default and not overrides and self._cached_config is not None and self._cached_pipeline is not None:
                 return self._cached_config, self._cached_pipeline
 
             cfg = self._resolve_config(config_path, overrides)
             pipe = build_pipeline(cfg)
 
             # Cache if using default configuration
-            if config_path is None and not overrides:
+            if uses_default and not overrides:
                 self._cached_config = cfg
                 self._cached_pipeline = pipe
 
@@ -165,6 +167,30 @@ class NulliusService:
                 corpus_path = _resolve_repo_path(cfg["paths"]["corpus"])
                 self._cached_corpus = Corpus.from_jsonl(corpus_path)
             return self._cached_corpus
+
+    def _ensure_quick_loaded(
+        self,
+        config_path: str | Path | None = None,
+        overrides: Sequence[str] | None = None,
+    ) -> tuple[dict[str, Any], Any, Any]:
+        """Construct only the configured extractor/retriever for Tier 1.
+
+        A lightweight BM25 config must work without NLI or reranker model files.
+        Cache by resolved configuration so popup requests reuse warm components.
+        """
+        with self._thread_lock:
+            cfg = self._resolve_config(config_path, overrides)
+            key = config_hash(cfg)
+            if key not in self._quick_cache:
+                load_builtins()
+                components = cfg["components"]
+                extractor = build("extractor", components["extractor"])
+                retriever = build("retriever", components["retriever"])
+                if len(self._quick_cache) >= 8:
+                    self._quick_cache.pop(next(iter(self._quick_cache)))
+                self._quick_cache[key] = (extractor, retriever)
+            extractor, retriever = self._quick_cache[key]
+            return cfg, extractor, retriever
 
     def get_examples(self, cfg: Mapping[str, Any]) -> dict[str, Example]:
         with self._thread_lock:
@@ -315,11 +341,11 @@ class NulliusService:
         self._queue_depth += 1
         try:
             async with self._lock:
-                cfg, pipe = self._ensure_loaded(config_path, overrides)
+                cfg, extractor, retriever = self._ensure_quick_loaded(config_path, overrides)
                 timer = _Timer()
 
                 with _timed(timer, "extract_ms"):
-                    claims = pipe.extractor.extract(response_text)
+                    claims = extractor.extract(response_text)
                 if check_contracts:
                     check_claims(claims, response_text)
 
@@ -329,7 +355,7 @@ class NulliusService:
 
                 for claim in claims:
                     with _timed(timer, "retrieve_ms"):
-                        candidates = pipe.retriever.retrieve(claim, retrieve_k)
+                        candidates = retriever.retrieve(claim, retrieve_k)
                     if check_contracts:
                         check_evidence_list(candidates, k=retrieve_k, stage="retrieve")
 
@@ -557,10 +583,9 @@ class NulliusService:
         }
 
         line = json.dumps(annotated_record, ensure_ascii=False) + "\n"
-        with self._thread_lock:
-            with target_file.open("a", encoding="utf-8") as fh:
-                fh.write(line)
-                fh.flush()
+        with self._thread_lock, target_file.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.flush()
 
         return annotated_record
 

@@ -10,7 +10,6 @@ Provides:
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Any
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,13 +25,14 @@ from src.service import NulliusService, get_service
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Ensure default service is initialized
-    service = get_service()
+    get_service()
     yield
 
 
 def create_app(
     default_config_path: str = "configs/mini.yaml",
     title: str = "Nullius Inspection Harness Backend",
+    service: NulliusService | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title=title,
@@ -43,6 +43,9 @@ def create_app(
         version=SCHEMA_VERSION,
         lifespan=lifespan,
     )
+
+    if service is not None:
+        app.dependency_overrides[get_service] = lambda: service
 
     # Local development and browser extension origins
     app.add_middleware(

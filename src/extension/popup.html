@@ -1,11 +1,12 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <title>Nullius · ChatGPT inspection</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      width: 350px;
+      width: 440px;
       margin: 0;
       padding: 16px;
       color: #333;
@@ -32,7 +33,7 @@
       background: #f5f5f5;
       border: 1px solid #ddd;
       border-radius: 4px;
-      max-height: 80px;
+      max-height: 180px;
       overflow-y: auto;
       white-space: pre-wrap;
       word-wrap: break-word;
@@ -88,7 +89,7 @@
       margin-bottom: 4px;
     }
     .badge-likely-checkable { background-color: #e6f4ea; color: #1e8e3e; border: 1px solid #ceead6; }
-    .badge-no-evidence-found { background-color: #fce8e6; color: #d93025; border: 1px solid #fad2cf; }
+    .badge-no-evidence-found { background-color: #f1f3f4; color: #5f6368; border: 1px solid #dadce0; }
     .badge-pending { background-color: #f1f3f4; color: #5f6368; border: 1px solid #dadce0; }
     
     .badge-Supported { background-color: #e6f4ea; color: #1e8e3e; border: 1px solid #ceead6; }
@@ -135,9 +136,12 @@
       font-family: monospace;
       margin-bottom: 4px;
     }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .notice { font-size: 12px; color: #555; line-height: 1.5; }
     .pairwise-scores {
       font-size: 10px;
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       color: #555;
     }
@@ -158,19 +162,23 @@
   </style>
 </head>
 <body>
-  <h2>Nullius Inspection Harness</h2>
+  <h2>Nullius · ChatGPT inspection</h2>
+  <p class="notice">Research harness · small debug corpus. Missing evidence is not a falsehood. ★ DECISIVE means the aggregation rule selected that evidence. No scientific validation is claimed.</p>
   
   <div class="section">
     <div class="label">Response Preview</div>
     <div id="preview-box">Loading...</div>
   </div>
 
+  <button id="refresh-btn">Refresh response</button>
+  <button id="connection-btn">Test connection</button>
   <button id="quick-btn" disabled>Quick Check</button>
   <button id="full-btn" disabled>Full Inspection</button>
 
-  <div id="status-area"></div>
+  <div id="status-area" role="status" aria-live="polite"></div>
   <div id="results-area"></div>
 
+  <p class="notice">Only an explicit check sends the previewed answer to your local Nullius backend. Keep this popup open until the request finishes.</p>
   <script src="popup.js"></script>
 </body>
 </html>

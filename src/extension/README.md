@@ -64,8 +64,21 @@ This is a developer installation, not a Chrome Web Store release.
 
 After pulling an update, click the extension's **Reload** button in
 `chrome://extensions`, then reload your ChatGPT tab. **Refresh response** updates
-the snapshot in an already-open popup. Every check captures the latest answer
-again, so it does not silently send an older answer after the conversation changes.
+the snapshot in an already-open popup. Each check of a page-captured answer captures
+the latest answer again, so it does not silently send an older answer after the
+conversation changes. Capture uses a one-time script result, with no persistent
+message listeners that can retain an older adapter after an update.
+
+## If the answer is not detected
+
+Open **Paste answer instead**, copy the completed answer from ChatGPT, paste it,
+and click **Use pasted answer**. Check **Response Preview**, then click **Quick
+Check** or **Full Inspection**. Pasting and selecting text make no backend request.
+Checks use that selected snapshot; editing the paste box does not change the
+preview until you click **Use pasted answer** again. The preview identifies pasted
+text and exports record `capture_source: "pasted-answer"` rather than
+`"chatgpt-page"`. **Refresh response** switches back to automatic page capture.
+The paste box and selected snapshot disappear when the popup closes.
 
 ## What the results mean
 
@@ -106,7 +119,8 @@ Quick Check has no verifier scores, so its rule-comparison button stays disabled
 
 Click **Export inspection JSON** after either kind of check. The download keeps:
 
-- The exact captured answer and the original, unmodified backend result.
+- The exact captured answer, whether it came from the page or was pasted, and the
+  original, unmodified backend result.
 - Original run ID, configuration hash, Git commit, timestamp, resolved configuration,
   evidence and pairwise scores when returned by Full Inspection.
 - Validated rule comparisons and their requested settings, when available.
@@ -122,8 +136,10 @@ Closing the popup loses local state; download your inspection before closing.
 
 - **No answer found:** open a conversation containing an assistant answer, reload
   ChatGPT after extension updates, and click Refresh response. ChatGPT's DOM can
-  change; the adapter looks for `data-message-author-role="assistant"` and answer
-  `.markdown` containers.
+  change; the adapter recognizes explicit assistant message/turn markers and the
+  English "ChatGPT said:" conversation heading, including `display:contents`
+  wrappers. It does not guess that arbitrary markdown is an assistant answer.
+  If automatic capture still fails, use **Paste answer instead**.
 - **Still generating:** wait for ChatGPT to finish, then Refresh response.
 - **Cannot connect:** start the backend locally; check its terminal for dependency,
   model-download or port-in-use errors. Test connection checks API availability,
@@ -136,7 +152,9 @@ On your real Chrome profile, check a completed ChatGPT answer, start another ans
 while the popup is open and confirm streaming is blocked, then refresh after it
 finishes. Confirm the new text appears in the preview. Try both checks; compare
 the full evidence IDs and scores with the backend. Then compare rules and export
-the JSON, checking that the run IDs and pairwise scores remain identical. Stop the backend and confirm
+the JSON, checking that the run IDs and pairwise scores remain identical. Also
+select a pasted answer, confirm its preview and exported source, and click Refresh
+response to return to the latest ChatGPT answer. Stop the backend and confirm
 Test connection displays an error. Never use these smoke checks as scientific
 benchmark results.
 

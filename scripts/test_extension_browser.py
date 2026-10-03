@@ -18,7 +18,7 @@ from playwright.sync_api import sync_playwright
 EXTENSION = Path(__file__).resolve().parents[1] / "src" / "extension"
 
 
-class ChatGPTCaptureTests(unittest.TestCase):
+class BrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.playwright = sync_playwright().start()
@@ -31,6 +31,11 @@ class ChatGPTCaptureTests(unittest.TestCase):
         cls.browser.close()
         cls.playwright.stop()
 
+    def tearDown(self):
+        self.context.close()
+
+
+class ChatGPTCaptureTests(BrowserTests):
     def setUp(self):
         self.context = self.browser.new_context()
         self.page = self.context.new_page()
@@ -44,30 +49,71 @@ class ChatGPTCaptureTests(unittest.TestCase):
                 "<button>Copy</button></section></main>",
             ),
         )
-        self.page.add_init_script("""
-          window.captureListeners = [];
-          window.chrome = { runtime: { onMessage: { addListener: fn => captureListeners.push(fn) } } };
-        """)
         self.page.goto("https://chatgpt.com/c/fixture")
-        self.page.add_script_tag(path=str(EXTENSION / "content.js"))
-
-    def tearDown(self):
-        self.context.close()
 
     def capture(self):
-        return self.page.evaluate("""() => {
-          let result;
-          captureListeners[0]({type:'CAPTURE_RESPONSE'}, {}, value => result = value);
-          return result;
-        }""")
+        return self.page.evaluate((EXTENSION / "content.js").read_text())
 
     def test_latest_answer_excludes_toolbar_and_user_text(self):
         self.assertEqual(self.capture(), {"success": True, "text": "Latest answer."})
 
-    def test_repeat_injection_has_one_listener(self):
-        self.page.add_script_tag(path=str(EXTENSION / "content.js"))
-        self.assertEqual(self.page.evaluate("captureListeners.length"), 1)
+    def test_repeat_injection_returns_fresh_snapshot_without_listeners(self):
+        self.page.evaluate("""() => {
+          window.__nulliusCaptureV2Installed = true;
+          window.chrome = { runtime: { onMessage: { addListener: () => {
+            throw new Error('Persistent listeners must not be installed');
+          } } } };
+        }""")
         self.assertTrue(self.capture()["success"])
+        self.page.locator("section .markdown").evaluate("node => node.textContent = 'Changed answer.'")
+        self.assertEqual(self.capture()["text"], "Changed answer.")
+
+    def test_display_contents_wrapper_is_detected(self):
+        self.page.locator("section").evaluate("node => node.style.display = 'contents'")
+        self.assertEqual(self.page.locator("section").evaluate("node => node.getClientRects().length"), 0)
+        self.assertEqual(self.capture()["text"], "Latest answer.")
+
+    def test_explicit_assistant_turn_and_nested_roles_preserve_all_blocks(self):
+        self.page.set_content('''<article data-turn="assistant">
+          <div data-message-author-role="assistant"><div class="markdown">First.</div></div>
+          <div data-message-author-role="assistant"><div class="markdown">Second.</div></div>
+          <button>Copy answer</button></article>
+          <article data-turn="user"><div class="markdown">User question.</div></article>''')
+        self.assertEqual(self.capture()["text"], "First.\n\nSecond.")
+
+    def test_heading_layout_excludes_later_user_turn(self):
+        self.page.set_content('''<article data-testid="conversation-turn-1">
+          <h6 class="sr-only">ChatGPT said:</h6><div class="markdown">Heading answer.</div>
+          </article><article data-testid="conversation-turn-2"><h5>You said:</h5>
+          <div class="markdown"><h6>ChatGPT said:</h6>Quoted user text.</div></article>''')
+        self.assertEqual(self.capture()["text"], "Heading answer.")
+
+    def test_unmarked_markdown_is_not_guessed_to_be_an_answer(self):
+        self.page.set_content('<main><div class="markdown">Unidentified text.</div></main>')
+        result = self.capture()
+        self.assertFalse(result["success"])
+        self.assertIn("Paste answer instead", result["error"])
+
+    def test_hidden_answers_and_hidden_body_blocks_are_excluded(self):
+        self.page.locator("section").evaluate('''node => {
+          const hidden = document.createElement('div'); hidden.className = 'markdown';
+          hidden.style.display = 'none'; hidden.textContent = 'Hidden text.'; node.append(hidden);
+        }''')
+        self.assertEqual(self.capture()["text"], "Latest answer.")
+        self.page.locator("section").evaluate("node => node.style.display = 'none'")
+        self.assertEqual(self.capture()["text"], "Old answer.")
+
+    def test_plain_body_removes_controls_without_changing_page(self):
+        self.page.set_content('''<article data-testid="assistant-message"><h6>Answer heading.</h6><p>Plain answer.</p>
+          <button>Copy</button><div role="toolbar">Actions</div>
+          <span style="display:none">Hidden text.</span></article>''')
+        before = self.page.content()
+        self.assertEqual(self.capture()["text"], "Answer heading.\nPlain answer.")
+        self.assertEqual(self.page.content(), before)
+
+    def test_hidden_latest_markdown_does_not_leak_or_fall_back(self):
+        self.page.locator("section .markdown").evaluate("node => node.style.display = 'none'")
+        self.assertFalse(self.capture()["success"])
 
     def test_stop_button_blocks_streaming_but_hidden_button_does_not(self):
         self.page.evaluate("""() => {
@@ -95,8 +141,7 @@ class ChatGPTCaptureTests(unittest.TestCase):
         self.assertEqual(self.capture()["text"], "First block.\n\nSecond block.")
 
 
-class PopupTests(ChatGPTCaptureTests):
-    # Override inherited capture cases: this class exercises the real popup JS in a browser.
+class PopupTests(BrowserTests):
     def setUp(self):
         self.context = self.browser.new_context()
         self.page = self.context.new_page()
@@ -110,11 +155,12 @@ class PopupTests(ChatGPTCaptureTests):
           window.injectionCount = 0;
           window.chrome = {
             tabs: {
-              query: async () => [{id:7,url:'https://chatgpt.com/c/fixture'}],
-              sendMessage: async () => window.testCapture
+              query: async () => [{id:7,url:'https://chatgpt.com/c/fixture'}]
             },
-            scripting: {executeScript: async () => {window.injectionCount++;}},
-            runtime: {getManifest: () => ({version:'1.2.0'})}
+            scripting: {executeScript: async () => {
+              window.injectionCount++; return [{frameId:0,result:window.testCapture}];
+            }},
+            runtime: {getManifest: () => ({version:'1.2.1'})}
           };
         """)
         self.page.route(
@@ -180,16 +226,85 @@ class PopupTests(ChatGPTCaptureTests):
             body=json.dumps(data),
         )
 
-    # Inherited capture tests are suppressed here; fixtures differ deliberately.
-    test_latest_answer_excludes_toolbar_and_user_text = None
-    test_repeat_injection_has_one_listener = None
-    test_stop_button_blocks_streaming_but_hidden_button_does_not = None
-    test_empty_latest_does_not_fall_back_to_old_answer = None
-    test_multiple_body_blocks_without_duplicate_nested_markdown = None
-
     def test_opening_popup_sends_no_backend_request(self):
         self.assertEqual(self.requests, [])
         self.assertEqual(self.page.locator("#preview-box").inner_text(), "Initial answer.")
+
+    def test_capture_failure_offers_paste_and_checks_only_explicitly_selected_text(self):
+        self.page.evaluate("window.testCapture = {success:false,error:'No assistant answer detected.'}")
+        self.page.click("#refresh-btn")
+        self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
+        self.assertTrue(self.page.locator("#paste-details").evaluate("node => node.open"))
+        self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        answer = "  Pasted completed answer.\nSecond paragraph.  "
+        self.page.fill("#paste-input", answer)
+        self.page.click("#paste-btn")
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.page.locator("#preview-box").text_content(), answer)
+        self.assertIn("Pasted answer", self.page.locator("#source-label").inner_text())
+        injections = self.page.evaluate("window.injectionCount")
+        # Editing the draft is not the same as selecting it for inspection.
+        self.page.fill("#paste-input", "Unselected draft.")
+        self.page.click("#quick-btn")
+        self.page.wait_for_function("!document.getElementById('export-btn').disabled")
+        self.assertEqual(self.requests[0][1]["text"], answer)
+        self.assertEqual(self.page.evaluate("window.injectionCount"), injections)
+        with self.page.expect_download() as download_info:
+            self.page.click("#export-btn")
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "pasted.json"
+            download_info.value.save_as(target)
+            report = json.loads(target.read_text())
+        self.assertEqual(report["capture_source"], "pasted-answer")
+        self.assertEqual(report["captured_text"], answer)
+
+    def test_refresh_switches_pasted_answer_back_to_page_capture(self):
+        self.page.locator("#paste-details summary").click()
+        self.page.fill("#paste-input", "Pasted answer.")
+        self.page.click("#paste-btn")
+        self.page.click("#refresh-btn")
+        self.page.wait_for_function("document.getElementById('source-label').textContent === 'Latest ChatGPT answer'")
+        self.assertEqual(self.page.locator("#preview-box").inner_text(), "Initial answer.")
+        self.assertEqual(self.requests, [])
+        self.page.evaluate("window.testCapture.text = 'Updated page answer.'")
+        self.page.click("#quick-btn")
+        self.page.wait_for_function("!document.getElementById('export-btn').disabled")
+        self.assertEqual(self.requests[0][1]["text"], "Updated page answer.")
+
+    def test_empty_paste_preserves_previous_preview_and_inspection(self):
+        self.page.click("#quick-btn")
+        self.page.wait_for_function("!document.getElementById('export-btn').disabled")
+        self.page.locator("#paste-details summary").click()
+        self.page.fill("#paste-input", " \n ")
+        self.page.click("#paste-btn")
+        self.assertIn("Paste a completed answer first", self.page.locator("#status-area").inner_text())
+        self.assertEqual(self.page.locator("#preview-box").inner_text(), "Initial answer.")
+        self.assertFalse(self.page.locator("#export-btn").is_disabled())
+        self.assertEqual(len(self.requests), 1)
+
+    def test_new_pasted_answer_clears_previous_full_results_and_comparison(self):
+        self.complete_full_fixture()
+        self.page.click("#compare-btn")
+        self.page.wait_for_function("document.getElementById('comparison-area').querySelector('table') !== null")
+        self.page.locator("#paste-details summary").click()
+        self.page.fill("#paste-input", "Different pasted answer.")
+        self.page.click("#paste-btn")
+        self.assertEqual(self.page.locator("#results-area").inner_text(), "")
+        self.assertEqual(self.page.locator("#comparison-area").inner_text(), "")
+        self.assertTrue(self.page.locator("#compare-btn").is_disabled())
+        self.assertTrue(self.page.locator("#export-btn").is_disabled())
+        self.assertEqual(len(self.requests), 2)
+
+    def test_failed_refresh_does_not_reuse_pasted_answer(self):
+        self.page.locator("#paste-details summary").click()
+        self.page.fill("#paste-input", "Pasted answer.")
+        self.page.click("#paste-btn")
+        self.page.evaluate("window.testCapture = {success:false,error:'No answer.'}")
+        self.page.click("#refresh-btn")
+        self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
+        self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        self.assertTrue(self.page.locator("#full-btn").is_disabled())
+        self.assertEqual(self.requests, [])
 
     def test_quick_recaptures_fresh_response_and_skips_total_badge(self):
         self.page.evaluate("window.testCapture.text = 'New answer.'")
@@ -406,7 +521,8 @@ class PopupTests(ChatGPTCaptureTests):
             download_info.value.save_as(target)
             report = json.loads(target.read_text())
         self.assertEqual(report["schema_version"], "nullius-inspection-export-v1")
-        self.assertEqual(report["extension_version"], "1.2.0")
+        self.assertEqual(report["extension_version"], "1.2.1")
+        self.assertEqual(report["capture_source"], "chatgpt-page")
         self.assertEqual(report["captured_text"], "Initial answer.")
         self.assertEqual(report["original_result"], self.backend_data)
         self.assertEqual(report["rule_comparison"]["run_id"], report["original_result"]["run_id"])

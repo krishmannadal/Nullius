@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Nullius Inspection Harness",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Inspect claims and evidence in completed ChatGPT answers using a local Nullius research backend.",
   "permissions": [
     "activeTab",

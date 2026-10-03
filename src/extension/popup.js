@@ -1,5 +1,9 @@
 document.addEventListener('DOMContentLoaded', async () => {
   const previewBox = document.getElementById('preview-box');
+  const sourceLabel = document.getElementById('source-label');
+  const pasteDetails = document.getElementById('paste-details');
+  const pasteInput = document.getElementById('paste-input');
+  const pasteBtn = document.getElementById('paste-btn');
   const quickBtn = document.getElementById('quick-btn');
   const fullBtn = document.getElementById('full-btn');
   const refreshBtn = document.getElementById('refresh-btn');
@@ -15,6 +19,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
   const timeouts = { quick: 5000, full: 60000 };
   let capturedText = null;
+  let captureSource = null;
   let busy = false;
   let inspection = null;
   let comparison = null;
@@ -38,6 +43,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     fullBtn.disabled = value || !capturedText;
     refreshBtn.disabled = value;
     connectionBtn.disabled = value;
+    pasteBtn.disabled = value;
+    pasteInput.disabled = value;
     compareBtn.disabled = value || comparisonExpired || inspection?.kind !== 'full' ||
       !inspection.data.run_id || !inspection.data.config_hash || !inspection.data.claims.length;
     exportBtn.disabled = value || !inspection;
@@ -56,12 +63,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!tab?.id || !tab.url || !['chatgpt.com', 'chat.openai.com'].includes(new URL(tab.url).hostname)) {
       throw new Error('Open a conversation on chatgpt.com, then click Refresh response.');
     }
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_RESPONSE' });
+    const frames = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    const response = frames.find(frame => frame.frameId === 0)?.result;
     if (!response?.success || typeof response.text !== 'string' || !response.text.trim()) {
       throw new Error(response?.error || 'Could not capture the latest ChatGPT answer. Refresh the page and try again.');
     }
     capturedText = response.text;
+    captureSource = 'chatgpt-page';
+    sourceLabel.textContent = 'Latest ChatGPT answer';
     previewBox.textContent = capturedText;
     return capturedText;
   }
@@ -70,12 +79,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (busy) return;
     setBusy(true);
     clearInspection();
+    capturedText = null;
+    captureSource = null;
+    sourceLabel.textContent = '';
     statusArea.style.display = 'none';
     try {
       await captureLatest();
     } catch (error) {
       capturedText = null;
       previewBox.textContent = error.message;
+      pasteDetails.open = true;
       showStatus(error.message, true);
     } finally {
       setBusy(false);
@@ -92,8 +105,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     let timeoutId;
     let stage = 'capture';
     try {
-      // Capture again on each explicit check: never submit an old popup snapshot.
-      const text = await captureLatest();
+      // Page checks recapture; an explicitly chosen pasted answer keeps its previewed snapshot.
+      const text = captureSource === 'pasted-answer' ? capturedText : await captureLatest();
       stage = 'backend';
       const controller = new AbortController();
       timeoutId = setTimeout(() => controller.abort(), timeouts[kind]);
@@ -115,7 +128,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           (kind === 'full' && (!Array.isArray(data.verdicts) || !data.evidence_by_claim))) {
         throw new Error('Backend returned an invalid inspection response. Update and restart Nullius.');
       }
-      inspection = { kind, captured_text: text, data };
+      inspection = { kind, captured_text: text, capture_source: captureSource, data };
       if (kind === 'quick') renderQuickResults(data);
       else renderFullResults(data);
       showStatus(kind === 'quick' ?
@@ -125,7 +138,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       clearInspection();
       if (stage === 'capture') {
         capturedText = null;
+        captureSource = null;
+        sourceLabel.textContent = '';
         previewBox.textContent = error.message;
+        pasteDetails.open = true;
         showStatus(error.message, true);
       } else if (error.name === 'AbortError') {
         showStatus('Request timed out. First-time model loading can take longer; warm the backend and try again. Closing this request does not stop backend computation.', true);
@@ -263,6 +279,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       extension_version: chrome.runtime?.getManifest?.()?.version || 'unknown',
       inspection_kind: inspection.kind,
       captured_text: inspection.captured_text,
+      capture_source: inspection.capture_source,
       original_result: inspection.data,
       comparison_request: comparison ? { target_aggregators: rules, aggregator_configs: {} } : null,
       rule_comparison: comparison,
@@ -278,6 +295,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     showStatus('Inspection exported locally. The file contains the captured answer; share it only when appropriate.');
   });
 
+  pasteBtn.addEventListener('click', () => {
+    if (busy) return;
+    if (!pasteInput.value.trim()) {
+      showStatus('Paste a completed answer first. The current preview has not changed.', true);
+      return;
+    }
+    clearInspection();
+    capturedText = pasteInput.value;
+    captureSource = 'pasted-answer';
+    previewBox.textContent = capturedText;
+    sourceLabel.textContent = 'Pasted answer · Refresh response switches back to ChatGPT';
+    showStatus('Pasted answer ready. Choose Quick Check or Full Inspection to send this preview to your local backend.');
+    setBusy(false);
+  });
   refreshBtn.addEventListener('click', refresh);
   quickBtn.addEventListener('click', () => inspect('quick'));
   fullBtn.addEventListener('click', () => inspect('full'));

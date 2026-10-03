@@ -143,6 +143,8 @@
     summary { cursor: pointer; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     .notice { font-size: 12px; color: #555; line-height: 1.5; }
+    #paste-input { box-sizing: border-box; width: 100%; min-height: 100px; padding: 8px; font: inherit; }
+    #paste-btn { margin-top: 8px; }
     .pairwise-scores {
       font-size: 10px;
       display: flex;
@@ -173,7 +175,16 @@
   <div class="section">
     <div class="label">Response Preview</div>
     <div id="preview-box">Loading...</div>
+    <p id="source-label" class="notice" aria-live="polite"></p>
   </div>
+
+  <details id="paste-details">
+    <summary>Paste answer instead</summary>
+    <p class="notice">Copy the completed ChatGPT answer and paste it here if automatic capture fails. Click Use pasted answer to update the preview.</p>
+    <label for="paste-input">Answer text</label>
+    <textarea id="paste-input" placeholder="Paste the answer you want to inspect" spellcheck="false"></textarea>
+    <button id="paste-btn">Use pasted answer</button>
+  </details>
 
   <button id="refresh-btn">Refresh response</button>
   <button id="connection-btn">Test connection</button>

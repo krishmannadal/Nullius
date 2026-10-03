@@ -50,6 +50,10 @@ from src.core.types import (
     Trace,
     utcnow_iso,
 )
+from src.core.trace_io import (
+    ALLOWED_FAILURE_CATEGORIES,
+    save_failure_case as save_failure_case_file,
+)
 from src.data.corpus import Corpus
 from src.data.examples import Example, load_examples
 from src.pipeline import RunContext, _timed, _Timer, analyze, gold_evidence_for
@@ -62,6 +66,8 @@ class ExecutionState:
     git_sha: str | None
     claims_inputs: dict[str, tuple[Claim, list[EvidenceVerdict]]]
     expires_at: float
+    trace: Trace
+
 
 def _resolve_repo_path(path_str: str | Path) -> Path:
     p = Path(path_str)
@@ -215,10 +221,19 @@ class NulliusService:
             async with self._lock:
                 cfg, pipe = self._ensure_loaded(config_path, overrides)
                 ctx = RunContext.create(cfg, pipe)
+                corpus = self.get_corpus(cfg)
+                examples = self.get_examples(cfg)
+                matching_ex = None
+                for ex in examples.values():
+                    if ex.text.strip() == response_text.strip():
+                        matching_ex = ex
+                        break
                 trace = analyze(
                     pipe,
                     response_text,
                     ctx,
+                    example=matching_ex,
+                    corpus=corpus if matching_ex else None,
                     retrieve_k=retrieve_k,
                     check_contracts=check_contracts,
                     mode="retrieved",
@@ -462,6 +477,7 @@ class NulliusService:
                     },
                 )
 
+                trace = self._store_run(trace)
                 yield {
                     "event": "complete",
                     "data": trace.to_dict(),
@@ -491,7 +507,8 @@ class NulliusService:
                 config_hash=trace.config_hash,
                 git_sha=trace.git_sha,
                 claims_inputs=claims_inputs,
-                expires_at=now + self._STORE_TTL
+                expires_at=now + self._STORE_TTL,
+                trace=trace,
             )
 
             # Evict oldest if full
@@ -591,6 +608,93 @@ class NulliusService:
             "git_sha": git_sha,
             "comparisons": comparisons,
         }
+
+    def save_failure_case(
+        self,
+        run_id: str,
+        claim_id: str,
+        failure_category: str,
+        researcher_note: str,
+        human_label: str | None = None,
+        oracle_run_id: str | None = None,
+        alternative_aggregations: dict[str, Any] | None = None,
+        out_dir: str | Path = "results/failure_cases",
+    ) -> dict[str, Any]:
+        """Save a structured failure case linked to server-side execution state.
+
+        Guarantees critical provenance rules:
+          - Server-side ExecutionState is the single source of truth.
+          - Client Trace/verdict payloads are never accepted as fallbacks.
+          - Throws KeyError if run_id, claim_id, or oracle_run_id is expired/not found.
+          - Throws ValueError if failure_category is invalid or run relationships mismatch.
+        """
+        if failure_category not in ALLOWED_FAILURE_CATEGORIES:
+            raise ValueError(
+                f"Invalid failure category {failure_category!r}. Allowed: {sorted(ALLOWED_FAILURE_CATEGORIES)}"
+            )
+
+        with self._store_lock:
+            state = self._execution_store.get(run_id)
+            if state is None or state.expires_at < time.time():
+                if state is not None:
+                    del self._execution_store[run_id]
+                raise KeyError(f"Run ID {run_id!r} not found or expired")
+
+            if state.trace.mode != "retrieved":
+                raise ValueError(f"Source run must be in 'retrieved' mode, got {state.trace.mode!r}")
+
+            if claim_id not in state.claims_inputs:
+                raise KeyError(f"Claim ID {claim_id!r} not found in run {run_id!r}")
+
+            oracle_trace = None
+            if oracle_run_id is not None:
+                oracle_state = self._execution_store.get(oracle_run_id)
+                if oracle_state is None or oracle_state.expires_at < time.time():
+                    if oracle_state is not None:
+                        del self._execution_store[oracle_run_id]
+                    raise KeyError(f"Oracle run ID {oracle_run_id!r} not found or expired")
+
+                if oracle_state.trace.mode != "oracle":
+                    raise ValueError(f"Run {oracle_run_id!r} has mode {oracle_state.trace.mode!r}, expected 'oracle'")
+
+                if oracle_state.trace.response_text.strip() != state.trace.response_text.strip():
+                    raise ValueError("Source run and oracle run have mismatched response text")
+
+                oracle_trace = oracle_state.trace
+
+            source_trace = state.trace
+
+        corpus_fp = None
+        try:
+            cfg, _ = self._ensure_loaded()
+            corpus = self.get_corpus(cfg)
+            corpus_fp = corpus.fingerprint()
+        except (RuntimeError, ValueError, FileNotFoundError, AttributeError, KeyError):
+            corpus_fp = None
+
+        researcher_annotation = {
+            "failure_category": failure_category,
+            "researcher_note": researcher_note,
+            "human_label": human_label,
+        }
+
+        path = save_failure_case_file(
+            trace=source_trace,
+            note=researcher_note,
+            claim_id=claim_id,
+            oracle_trace=oracle_trace,
+            researcher_annotation=researcher_annotation,
+            corpus_fingerprint=corpus_fp,
+            alternative_aggregations=alternative_aggregations,
+            out_dir=out_dir,
+        )
+
+        return {
+            "failure_case_id": f"fc_{path.stem}",
+            "file_path": str(path),
+            "status": "saved",
+        }
+
 
 
 # Singleton instance for application lifecycle

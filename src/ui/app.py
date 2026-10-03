@@ -169,6 +169,66 @@ def send_reaggregate_request(
         return None, f"Invalid JSON response: {exc}"
 
 
+def send_oracle_request(
+    base_url: str,
+    response_text: str,
+    timeout: tuple[float, float] = DEFAULT_TIMEOUT,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Hit the backend /analyze/oracle endpoint with response text."""
+    cleaned = base_url.rstrip("/")
+    if cleaned.endswith("/analyze"):
+        cleaned = cleaned[:-len("/analyze")].rstrip("/")
+    endpoint_url = f"{cleaned}/analyze/oracle"
+
+    try:
+        resp = requests.post(
+            endpoint_url,
+            json={"response_text": response_text},
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as exc:
+        return None, f"Oracle request failed: {exc}"
+
+    if resp.status_code != 200:
+        return None, format_http_error(resp)
+
+    try:
+        data = resp.json()
+        return data, None
+    except ValueError as exc:
+        return None, f"Invalid JSON response from oracle endpoint: {exc}"
+
+
+def send_save_failure_case_request(
+    base_url: str,
+    payload: dict[str, Any],
+    timeout: float = 10.0,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Submit a structured failure case to POST /failure-cases."""
+    cleaned = base_url.rstrip("/")
+    if cleaned.endswith("/analyze"):
+        cleaned = cleaned[:-len("/analyze")].rstrip("/")
+    endpoint_url = f"{cleaned}/failure-cases"
+
+    try:
+        resp = requests.post(
+            endpoint_url,
+            json=payload,
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as exc:
+        return None, f"Save failure case request failed: {exc}"
+
+    if resp.status_code != 200:
+        return None, format_http_error(resp)
+
+    try:
+        data = resp.json()
+        return data, None
+    except ValueError as exc:
+        return None, f"Invalid JSON response from failure-cases endpoint: {exc}"
+
+
 def main() -> None:
     st.set_page_config(page_title="Nullius Inspection Harness", layout="wide")
 
@@ -196,6 +256,16 @@ def main() -> None:
         st.session_state.submitted_text = None
     if "last_error" not in st.session_state:
         st.session_state.last_error = None
+    if "oracle_result" not in st.session_state:
+        st.session_state.oracle_result = None
+    if "oracle_error" not in st.session_state:
+        st.session_state.oracle_error = None
+    if "last_save_success" not in st.session_state:
+        st.session_state.last_save_success = None
+    if "last_save_error" not in st.session_state:
+        st.session_state.last_save_error = None
+    if "reaggregate_comparisons" not in st.session_state:
+        st.session_state.reaggregate_comparisons = {}
 
     # Input section
     input_text = st.text_area(
@@ -217,6 +287,11 @@ def main() -> None:
         st.session_state.result = None
         st.session_state.submitted_text = None
         st.session_state.last_error = None
+        st.session_state.oracle_result = None
+        st.session_state.oracle_error = None
+        st.session_state.last_save_success = None
+        st.session_state.last_save_error = None
+        st.session_state.reaggregate_comparisons = {}
 
         cleaned_text = input_text.strip()
         if not cleaned_text:
@@ -449,6 +524,7 @@ def main() -> None:
                                 if reagg_err:
                                     st.error(reagg_err)
                                 elif comparisons_dict and selected_claim_id in comparisons_dict:
+                                    st.session_state.reaggregate_comparisons = comparisons_dict
                                     claim_comparisons = comparisons_dict[selected_claim_id]
                                     for agg_name in baseline_aggregators:
                                         reagg_verdict = claim_comparisons.get(agg_name)
@@ -471,6 +547,183 @@ def main() -> None:
                         
                             if comp_data:
                                 st.dataframe(comp_data, use_container_width=True)
+
+                    # Oracle Comparison (available when response is associated with an example that has gold evidence)
+                    resolved_cfg = result.get("resolved_config", {})
+                    has_gold = resolved_cfg.get("has_gold_evidence", False)
+                    example_id = resolved_cfg.get("example_id")
+
+                    with st.expander("Oracle Comparison (Gold Evidence Substitution)", expanded=False):
+                        if not has_gold:
+                            st.info(
+                                "Oracle comparison is available only when the response is associated with an annotated dataset example with gold evidence. "
+                                "The current response does not match a gold example."
+                            )
+                        else:
+                            st.markdown(
+                                f"**Dataset Example:** `{example_id}` | **Annotated Gold Label:** `{resolved_cfg.get('gold_label', 'Unknown')}`"
+                            )
+                            st.markdown(
+                                "Runs verification with retrieved evidence replaced by the example's annotated gold evidence. "
+                                "Isolates retrieval failure from verifier failure."
+                            )
+
+                            run_oracle_btn = st.button("Run Oracle Verification", key=f"run_oracle_{selected_claim_id}")
+                            if run_oracle_btn:
+                                with st.spinner("Executing oracle verification..."):
+                                    o_data, o_err = send_oracle_request(backend_base_url, submitted_snapshot)
+                                    if o_err:
+                                        st.session_state.oracle_error = o_err
+                                        st.session_state.oracle_result = None
+                                    else:
+                                        st.session_state.oracle_result = o_data
+                                        st.session_state.oracle_error = None
+
+                            if st.session_state.get("oracle_error"):
+                                st.error(st.session_state.oracle_error)
+
+                            oracle_res = st.session_state.get("oracle_result")
+                            if oracle_res:
+                                o_verdicts = oracle_res.get("verdicts", [])
+                                o_verdict = next((v for v in o_verdicts if v.get("claim_id") == selected_claim_id), None)
+
+                                if o_verdict:
+                                    o_col1, o_col2 = st.columns(2)
+                                    with o_col1:
+                                        st.metric("Retrieved Condition Verdict", verdict.get("label", "Unknown"))
+                                    with o_col2:
+                                        st.metric("Oracle Condition Verdict", o_verdict.get("label", "Unknown"))
+
+                                    retrieved_lbl = verdict.get("label")
+                                    oracle_lbl = o_verdict.get("label")
+                                    if retrieved_lbl != oracle_lbl:
+                                        st.warning(
+                                            f"⚠️ **Verdict Disagreement**: Retrieved = `{retrieved_lbl}`, Oracle = `{oracle_lbl}`. "
+                                            "Note: A verdict difference does not automatically imply a retrieval failure; "
+                                            "check whether gold evidence was retrieved or how the verifier scored it."
+                                        )
+                                    else:
+                                        st.success(f"✓ Retrieved and Oracle verdicts agree: `{retrieved_lbl}`.")
+
+                                    o_evidence_by_claim = oracle_res.get("evidence_by_claim", {})
+                                    o_evidence = o_evidence_by_claim.get(selected_claim_id, [])
+                                    if o_evidence:
+                                        st.markdown("**Gold Evidence Sentences (Oracle Pool):**")
+                                        for gev in o_evidence:
+                                            st.markdown(f"- `{gev.get('id')}`: {gev.get('text', '')}")
+
+                    # Record Failure Case
+                    with st.expander("Record Failure Case (results/failure_cases/)", expanded=False):
+                        st.markdown("Persist this claim inspection as a reproducible failure case in `results/failure_cases/`.")
+
+                        is_editor_modified = (input_text != submitted_snapshot)
+                        if is_editor_modified:
+                            st.warning(
+                                "⚠️ **Input text in editor has changed since last analysis.** "
+                                "To save a failure case for modified text, rerun analysis first."
+                            )
+
+                        category_options = [
+                            "extraction_error",
+                            "retrieval_miss",
+                            "verifier_error",
+                            "aggregation_error",
+                            "corpus_insufficient",
+                            "oracle_disagreement",
+                            "unclear",
+                        ]
+                        selected_cat = st.selectbox(
+                            "Failure Category (Researcher Classification)",
+                            options=category_options,
+                            index=6,  # default "unclear"
+                            help="Classification of the observed failure mode. This is researcher annotation, not model truth.",
+                            key=f"fail_cat_{selected_claim_id}",
+                        )
+
+                        guardrail_passed = True
+                        if selected_cat == "retrieval_miss":
+                            has_oracle_evidence = False
+                            if st.session_state.get("oracle_result"):
+                                has_oracle_evidence = True
+
+                            confirm_corpus_has = st.checkbox(
+                                "I have verified that settling evidence exists in the corpus that the retriever missed.",
+                                value=has_oracle_evidence,
+                                key=f"confirm_retrieval_miss_{selected_claim_id}",
+                            )
+                            if not confirm_corpus_has:
+                                st.caption("⚠️ Guardrail: 'retrieval_miss' requires oracle evidence or explicit confirmation that the corpus contains settling evidence.")
+                                guardrail_passed = False
+
+                        elif selected_cat == "oracle_disagreement":
+                            st.caption(
+                                "ℹ️ Note: Oracle disagreement indicates retrieved != oracle verdict; "
+                                "it does not automatically imply retrieval caused the error."
+                            )
+
+                        human_label_options = ["None", "Supported", "Contradicted", "Insufficient", "Unclear"]
+                        selected_human_label = st.selectbox(
+                            "Human Ground-Truth Label (Optional)",
+                            options=human_label_options,
+                            index=0,
+                            key=f"human_label_{selected_claim_id}",
+                        )
+
+                        note_text = st.text_area(
+                            "Researcher Note",
+                            value="",
+                            placeholder="Explain the observed failure, discrepancy, or research context...",
+                            help="Researcher commentary saved alongside the case.",
+                            key=f"note_{selected_claim_id}",
+                        )
+
+                        can_save = (
+                            not is_editor_modified
+                            and guardrail_passed
+                            and bool(note_text.strip())
+                        )
+
+                        save_btn = st.button(
+                            "Save Failure Case",
+                            type="primary",
+                            disabled=not can_save,
+                            key=f"save_btn_{selected_claim_id}",
+                        )
+
+                        if save_btn:
+                            oracle_rid = (
+                                st.session_state.oracle_result.get("run_id")
+                                if st.session_state.get("oracle_result")
+                                else None
+                            )
+                            reagg_map = st.session_state.get("reaggregate_comparisons", {})
+                            alt_aggs = reagg_map.get(selected_claim_id)
+
+                            fc_payload = {
+                                "run_id": result.get("run_id"),
+                                "claim_id": selected_claim_id,
+                                "failure_category": selected_cat,
+                                "researcher_note": note_text.strip(),
+                                "human_label": None if selected_human_label == "None" else selected_human_label,
+                                "oracle_run_id": oracle_rid,
+                                "alternative_aggregations": alt_aggs,
+                            }
+                            with st.spinner("Saving failure case to results/failure_cases/..."):
+                                fc_data, fc_err = send_save_failure_case_request(backend_base_url, fc_payload)
+                                if fc_err:
+                                    st.session_state.last_save_error = fc_err
+                                    st.session_state.last_save_success = None
+                                else:
+                                    st.session_state.last_save_success = fc_data
+                                    st.session_state.last_save_error = None
+
+                        if st.session_state.get("last_save_error"):
+                            st.error(st.session_state.last_save_error)
+
+                        if st.session_state.get("last_save_success"):
+                            saved_info = st.session_state.last_save_success
+                            st.success(f"✓ Saved failure case: `{saved_info.get('file_path')}`")
+
 
         # Timings & Provenance
         st.markdown("---")

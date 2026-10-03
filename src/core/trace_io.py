@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import platform
 import sys
+import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -172,12 +173,26 @@ def run_dir_for(run_id: str, results_dir: str | Path = "results") -> Path:
 # failure cases — the error-analysis corpus
 # --------------------------------------------------------------------------- #
 
+ALLOWED_FAILURE_CATEGORIES: frozenset[str] = frozenset({
+    "extraction_error",
+    "retrieval_miss",
+    "verifier_error",
+    "aggregation_error",
+    "corpus_insufficient",
+    "oracle_disagreement",
+    "unclear",
+})
+
+
 def save_failure_case(
     trace: Trace,
     note: str,
     *,
     claim_id: str | None = None,
     oracle_trace: Trace | None = None,
+    researcher_annotation: dict[str, Any] | None = None,
+    corpus_fingerprint: str | None = None,
+    alternative_aggregations: dict[str, Any] | None = None,
     extra: dict[str, Any] | None = None,
     out_dir: str | Path = "results/failure_cases",
 ) -> Path:
@@ -197,18 +212,35 @@ def save_failure_case(
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     suffix = (claim_id or trace.run_id).replace(":", "_").replace("/", "_")
-    path = d / f"{stamp}-{suffix}.json"
+    base_name = f"{stamp}-{suffix}"
+    path = d / f"{base_name}.json"
+    if path.exists():
+        path = d / f"{base_name}-{uuid.uuid4().hex[:4]}.json"
+
+    fc_id = f"fc_{path.stem}"
+
+    annotation = dict(researcher_annotation or {})
+    if "failure_category" not in annotation:
+        annotation["failure_category"] = "unclear"
+    if "researcher_note" not in annotation:
+        annotation["researcher_note"] = note
+    if "human_label" not in annotation:
+        annotation["human_label"] = None
 
     record = {
+        "failure_case_id": fc_id,
         "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "schema_version": SCHEMA_VERSION,
         "note": note,
         "claim_id": claim_id,
         "source": "harness",
-        "trace": trace.to_dict(),
-        "oracle_trace": oracle_trace.to_dict() if oracle_trace else None,
         "git_sha": trace.git_sha,
         "config_hash": trace.config_hash,
+        "corpus_fingerprint": corpus_fingerprint,
+        "researcher_annotation": annotation,
+        "trace": trace.to_dict(),
+        "oracle_trace": oracle_trace.to_dict() if oracle_trace else None,
+        "alternative_aggregations": alternative_aggregations,
         **(extra or {}),
     }
     path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -228,6 +260,7 @@ def load_failure_cases(out_dir: str | Path = "results/failure_cases") -> list[di
 
 
 __all__ = [
+    "ALLOWED_FAILURE_CATEGORIES",
     "TraceWriter",
     "environment",
     "load_failure_cases",

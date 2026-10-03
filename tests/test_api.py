@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -270,6 +271,50 @@ def test_verify_full_json(client: ASGIClient):
     assert data["mode"] == "retrieved"
     assert len(data["claims"]) == 1
     assert len(data["verdicts"]) == 1
+    verdict = data["verdicts"][0]
+    assert len(verdict["per_evidence"]) > 0
+    ev0 = verdict["per_evidence"][0]
+    assert "p_entail" in ev0
+    assert "p_neutral" in ev0
+    assert "p_contra" in ev0
+    assert "similarity" in ev0
+    assert ev0["p_neutral"] is not None
+    assert 0.0 <= ev0["p_neutral"] <= 1.0
+    assert ev0["p_entail"] + ev0["p_neutral"] + ev0["p_contra"] == pytest.approx(1.0, abs=1e-4)
+
+
+def test_extension_popup_contract():
+    popup_path = Path("src/extension/popup.js")
+    assert popup_path.is_file(), "popup.js must exist"
+    content = popup_path.read_text(encoding="utf-8")
+
+    # 1. p_neutral rendered directly from backend response without client-side calculation
+    assert "evVerdict.p_neutral" in content, "p_neutral must be read directly from evVerdict"
+    assert "Neutral:" in content, "Neutral score label must be rendered"
+    assert "1 - evVerdict" not in content and "1 - p_" not in content, "Do not calculate 1 - p_entail - p_contra"
+
+    # 2. Separate endpoints and timeouts
+    assert "'http://127.0.0.1:8000/verify/quick'" in content
+    assert "5000" in content, "5s timeout for Quick Check"
+    assert "'http://127.0.0.1:8000/verify/full'" in content
+    assert "60000" in content, "60s timeout for Full Inspection"
+
+    # 3. Security invariants: zero innerHTML, zero eval
+    assert ".innerHTML" not in content, "Zero innerHTML property usage"
+    assert "eval(" not in content, "Zero eval allowed"
+
+    # 4. Safe DOM methods used
+    assert "createElement" in content
+    assert "replaceChildren" in content
+
+    # 5. No background polling or mutation observers
+    assert "MutationObserver" not in content
+    assert "setInterval" not in content
+
+    # 6. Traceability and integrity
+    assert "decisive_evidence_ids" in content, "Must read decisive evidence IDs from aggregation_trace"
+    assert "badge-decisive" in content, "Must render decisive badge"
+    assert "★ DECISIVE" in content, "Must render decisive label"
 
 
 def test_verify_full_sse_streaming(client: ASGIClient):
@@ -347,8 +392,6 @@ def test_reaggregate_success_from_analyze(client: ASGIClient):
         "aggregator_configs": {}
     }
     resp2 = client.post("/reaggregate", json_body=reagg_payload)
-    if resp2.status_code != 200:
-        print("resp2.text:", resp2.text)
     assert resp2.status_code == 200
     data2 = resp2.json()
 
@@ -382,8 +425,6 @@ def test_reaggregate_invalid_aggregator(client: ASGIClient):
         "target_aggregators": ["unknown_aggregator_999"],
     }
     resp2 = client.post("/reaggregate", json_body=payload)
-    if resp2.status_code != 400:
-        print("resp2.text:", resp2.text)
     assert resp2.status_code == 400
     assert "no aggregator named" in resp2.json()["detail"].lower()
 
@@ -399,6 +440,224 @@ def test_reaggregate_validation_error(client: ASGIClient):
 
 
 # --------------------------------------------------------------------------- #
+# /failure-cases
+# --------------------------------------------------------------------------- #
+
+def test_save_failure_case_success(client: ASGIClient):
+    # 1. Run analyze
+    payload = {"text": "Marie Curie was born in Warsaw."}
+    resp1 = client.post("/analyze", json_body=payload)
+    assert resp1.status_code == 200
+    data1 = resp1.json()
+    run_id = data1["run_id"]
+    claim_id = data1["claims"][0]["id"]
+    system_label = data1["verdicts"][0]["label"]
+
+    # 2. Save failure case
+    fc_payload = {
+        "run_id": run_id,
+        "claim_id": claim_id,
+        "failure_category": "verifier_error",
+        "researcher_note": "Model was overconfident on distractor hit",
+        "human_label": "Contradicted",
+    }
+    resp2 = client.post("/failure-cases", json_body=fc_payload)
+    assert resp2.status_code == 200, resp2.text
+    data2 = resp2.json()
+    assert data2["status"] == "saved"
+    assert data2["failure_case_id"].startswith("fc_")
+    file_path = Path(data2["file_path"])
+    assert file_path.is_file()
+
+    # 3. Verify saved content
+    saved = json.loads(file_path.read_text(encoding="utf-8"))
+    assert saved["failure_case_id"] == data2["failure_case_id"]
+    assert saved["claim_id"] == claim_id
+    assert saved["researcher_annotation"]["failure_category"] == "verifier_error"
+    assert saved["researcher_annotation"]["researcher_note"] == "Model was overconfident on distractor hit"
+    assert saved["researcher_annotation"]["human_label"] == "Contradicted"
+    assert saved["trace"]["run_id"] == run_id
+    assert saved["config_hash"] == data1["config_hash"]
+    # System verdict is preserved and not overwritten by human label
+    assert saved["trace"]["verdicts"][0]["label"] == system_label
+
+
+def test_save_failure_case_with_oracle_and_reaggregate(client: ASGIClient):
+    text = "Marie Curie was born in Warsaw."
+    # 1. Retrieved run
+    r1 = client.post("/analyze", json_body={"text": text}).json()
+    run_id = r1["run_id"]
+    claim_id = r1["claims"][0]["id"]
+
+    # 2. Oracle run
+    r_oracle = client.post("/analyze/oracle", json_body={"response_text": text}).json()
+    oracle_run_id = r_oracle["run_id"]
+
+    # 3. Reaggregate
+    reagg_payload = {
+        "run_id": run_id,
+        "target_aggregators": ["majority", "max_entailment"],
+    }
+    r_reagg = client.post("/reaggregate", json_body=reagg_payload).json()
+    alt_aggs = r_reagg["comparisons"][claim_id]
+
+    # 4. Save failure case with oracle and alternative aggregations
+    fc_payload = {
+        "run_id": run_id,
+        "claim_id": claim_id,
+        "failure_category": "oracle_disagreement",
+        "researcher_note": "Disagreement under investigation",
+        "oracle_run_id": oracle_run_id,
+        "alternative_aggregations": alt_aggs,
+    }
+    resp = client.post("/failure-cases", json_body=fc_payload)
+    assert resp.status_code == 200
+    saved_file = Path(resp.json()["file_path"])
+    assert saved_file.is_file()
+
+    saved = json.loads(saved_file.read_text(encoding="utf-8"))
+    assert saved["oracle_trace"] is not None
+    assert saved["oracle_trace"]["mode"] == "oracle"
+    assert saved["oracle_trace"]["run_id"] == oracle_run_id
+    assert saved["alternative_aggregations"] is not None
+    assert "majority" in saved["alternative_aggregations"]
+    assert "max_entailment" in saved["alternative_aggregations"]
+
+
+def test_save_failure_case_unknown_run(client: ASGIClient):
+    fc_payload = {
+        "run_id": "nonexistent_run_999",
+        "claim_id": "clm_fake",
+        "failure_category": "unclear",
+        "researcher_note": "Test note",
+    }
+    resp = client.post("/failure-cases", json_body=fc_payload)
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"].lower()
+
+
+def test_save_failure_case_unknown_claim(client: ASGIClient):
+    r1 = client.post("/analyze", json_body={"text": "Marie Curie was a physicist."}).json()
+    run_id = r1["run_id"]
+
+    fc_payload = {
+        "run_id": run_id,
+        "claim_id": "clm_nonexistent",
+        "failure_category": "unclear",
+        "researcher_note": "Test note",
+    }
+    resp = client.post("/failure-cases", json_body=fc_payload)
+    assert resp.status_code == 404
+    assert "claim id" in resp.json()["detail"].lower()
+
+
+def test_save_failure_case_unknown_oracle_run(client: ASGIClient):
+    r1 = client.post("/analyze", json_body={"text": "Marie Curie was a physicist."}).json()
+    run_id = r1["run_id"]
+    claim_id = r1["claims"][0]["id"]
+
+    fc_payload = {
+        "run_id": run_id,
+        "claim_id": claim_id,
+        "failure_category": "oracle_disagreement",
+        "researcher_note": "Test note",
+        "oracle_run_id": "oracle_nonexistent",
+    }
+    resp = client.post("/failure-cases", json_body=fc_payload)
+    assert resp.status_code == 404
+    assert "oracle run id" in resp.json()["detail"].lower()
+
+
+def test_save_failure_case_invalid_category(client: ASGIClient):
+    r1 = client.post("/analyze", json_body={"text": "Marie Curie was a physicist."}).json()
+    run_id = r1["run_id"]
+    claim_id = r1["claims"][0]["id"]
+
+    fc_payload = {
+        "run_id": run_id,
+        "claim_id": claim_id,
+        "failure_category": "hallucination_detected",  # invalid category
+        "researcher_note": "Test note",
+    }
+    resp = client.post("/failure-cases", json_body=fc_payload)
+    assert resp.status_code == 422
+
+
+def test_save_failure_case_mismatched_oracle_run(client: ASGIClient):
+    # Run 1: Marie Curie
+    r1 = client.post("/analyze", json_body={"text": "Marie Curie was born in Warsaw."}).json()
+    run_id = r1["run_id"]
+    claim_id = r1["claims"][0]["id"]
+
+    # Oracle run 2: Polonium (mini-004)
+    r_oracle = client.post("/analyze/oracle", json_body={"example_id": "mini-004"}).json()
+    oracle_run_id = r_oracle["run_id"]
+
+    fc_payload = {
+        "run_id": run_id,
+        "claim_id": claim_id,
+        "failure_category": "oracle_disagreement",
+        "researcher_note": "Mismatched test",
+        "oracle_run_id": oracle_run_id,
+    }
+    resp = client.post("/failure-cases", json_body=fc_payload)
+    assert resp.status_code == 400
+    assert "mismatched" in resp.json()["detail"].lower()
+
+
+def test_save_failure_case_duplicate_saves_create_distinct_files(client: ASGIClient):
+    r1 = client.post("/analyze", json_body={"text": "Marie Curie was born in Warsaw."}).json()
+    run_id = r1["run_id"]
+    claim_id = r1["claims"][0]["id"]
+
+    fc_payload = {
+        "run_id": run_id,
+        "claim_id": claim_id,
+        "failure_category": "unclear",
+        "researcher_note": "Duplicate test save",
+    }
+    resp1 = client.post("/failure-cases", json_body=fc_payload)
+    resp2 = client.post("/failure-cases", json_body=fc_payload)
+    assert resp1.status_code == 200
+    assert resp2.status_code == 200
+
+    f1 = resp1.json()["file_path"]
+    f2 = resp2.json()["file_path"]
+    assert f1 != f2
+    assert Path(f1).is_file()
+    assert Path(f2).is_file()
+
+
+def test_save_failure_case_round_trip_load(client: ASGIClient):
+    from src.core.trace_io import load_failure_cases
+
+    r1 = client.post("/analyze", json_body={"text": "Marie Curie was born in Warsaw."}).json()
+    run_id = r1["run_id"]
+    claim_id = r1["claims"][0]["id"]
+
+    unique_note = f"Boundary split issue {run_id}"
+    fc_payload = {
+        "run_id": run_id,
+        "claim_id": claim_id,
+        "failure_category": "extraction_error",
+        "researcher_note": unique_note,
+    }
+    resp = client.post("/failure-cases", json_body=fc_payload)
+    assert resp.status_code == 200
+
+    cases = load_failure_cases()
+    matched = [
+        c for c in cases
+        if c.get("researcher_annotation", {}).get("researcher_note") == unique_note
+    ]
+    assert len(matched) == 1
+    case = matched[0]
+    assert case["claim_id"] == claim_id
+    assert case["researcher_annotation"]["failure_category"] == "extraction_error"
+    assert case["trace"]["run_id"] == run_id
+
+
+# --------------------------------------------------------------------------- #
 # OpenAPI Schema
 # --------------------------------------------------------------------------- #
 
@@ -407,5 +666,5 @@ def test_openapi_schema(client: ASGIClient):
     assert resp.status_code == 200, resp.text
     schema = resp.json()
     paths = schema.get("paths", {})
-    for ep in ("/health", "/analyze", "/analyze/oracle", "/verify/quick", "/verify/full", "/annotate", "/reaggregate"):
+    for ep in ("/health", "/analyze", "/analyze/oracle", "/verify/quick", "/verify/full", "/annotate", "/reaggregate", "/failure-cases"):
         assert ep in paths, f"Endpoint {ep} missing from OpenAPI paths"

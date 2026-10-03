@@ -32,6 +32,8 @@ The verifier scores strictly single `(Claim, Evidence)` pairs (`Verifier.score(c
 | `/verify/quick` | `POST` | `VerifyQuickRequest` | `VerifyQuickResponse` | Tier 1 fast availability check. Statuses: `likely-checkable`, `no-evidence-found`. Badge counts. |
 | `/verify/full` | `POST` | `VerifyFullRequest` | `AnalyzeResponse` \| SSE Stream | Tier 2 full verification. Returns JSON or streams `start`, `claim_verdict`, `complete` SSE events. |
 | `/annotate` | `POST` | `AnnotateRequest` | `AnnotateResponse` | Writes human annotation record to `data/annotations/annotations.jsonl`. |
+| `/reaggregate` | `POST` | `ReaggregateRequest` | `ReaggregateResponse` | Pure re-aggregation over volatile in-memory execution state (`run_id`). No re-extraction or re-verification. |
+| `/failure-cases` | `POST` | `SaveFailureCaseRequest` | `FailureCaseResponse` | Client-stateless request resolving server-side volatile in-memory execution state (`run_id`). Persists structured case to `results/failure_cases/`. Workflow combines: system output + optional oracle output + researcher annotation. Not scientific validation. |
 
 ---
 
@@ -161,6 +163,7 @@ Returns HTTP 422:
 
 - **Single-worker inference queue:** Concurrent requests acquire an `asyncio.Lock` to avoid out-of-memory errors on 6 GB GPU hardware. Queue depth is reported in `/health`.
 - **In-memory cache:** The default pipeline is cached in memory; overriding pipeline components in a request builds a temporary pipeline for that request.
+- **Volatile in-memory execution state:** Backend runs are held in volatile in-memory execution state (`ExecutionStore`, bounded capacity and TTL) to serve pure reaggregation and failure-case provenance resolution. Expired runs require re-analysis; clients cannot submit client-cached traces as fallback.
 - **Localhost binding:** The server is intended for local execution (`127.0.0.1`), not public multi-tenant deployment.
 
 ---

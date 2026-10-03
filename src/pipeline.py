@@ -231,6 +231,7 @@ def analyze(
             "retrieve_k": pool,
             "example_id": example.id if example else None,
             "gold_label": example.gold_label.value if (example and example.gold_label) else None,
+            "has_gold_evidence": example.has_gold_evidence if example else False,
         },
     )
 

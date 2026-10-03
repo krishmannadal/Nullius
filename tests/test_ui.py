@@ -32,6 +32,9 @@ from src.ui.app import (
     build_endpoint_url,
     format_http_error,
     send_analyze_request,
+    send_oracle_request,
+    send_reaggregate_request,
+    send_save_failure_case_request,
     validate_response_payload,
 )
 
@@ -258,7 +261,7 @@ def test_3_valid_submission_makes_requests_correctly():
 
         # Results should be rendered without errors
         assert len(at.error) == 0
-        assert len(at.selectbox) == 1
+        assert len(at.selectbox) >= 1
         assert at.selectbox[0].value == "clm_01"
 
 
@@ -372,7 +375,7 @@ def test_6_failed_subsequent_submission_clears_stale_results():
         
         # 1 analyze + 1 reaggregate
         assert mock_post.call_count == 2
-        assert len(at.selectbox) == 1
+        assert len(at.selectbox) >= 1
 
         # Now submit again, which triggers failure (the second analyze call)
         at.button[0].click().run()
@@ -578,7 +581,7 @@ def test_9_separate_ui_sessions_do_not_share_results():
         at1 = AppTest.from_file(APP_PATH).run()
         at1.text_area[0].input("Session 1 text.").run()
         at1.button[0].click().run()
-        assert len(at1.selectbox) == 1
+        assert len(at1.selectbox) >= 1
         assert at1.session_state.result is not None
 
         # Session 2 initializes independently
@@ -642,3 +645,156 @@ def test_10_reaggregate_comparison():
         assert len(df) == 5  # 5 baseline aggregators
         assert "Aggregator" in df.columns
         assert "Label" in df.columns
+
+
+def test_send_oracle_request_helpers():
+    """Test send_oracle_request client function under success, HTTP error, and connection failure."""
+    # 1. Success
+    with patch("requests.post") as mock_post:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"mode": "oracle", "run_id": "oracle_123"}
+        mock_post.return_value = mock_resp
+
+        data, err = send_oracle_request("http://127.0.0.1:8000", "Sample text")
+        assert err is None
+        assert data["mode"] == "oracle"
+        assert mock_post.call_args[1]["json"] == {"response_text": "Sample text"}
+
+    # 2. HTTP 404
+    with patch("requests.post") as mock_post:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.json.return_value = {"detail": "Example not found"}
+        mock_post.return_value = mock_resp
+
+        data, err = send_oracle_request("http://127.0.0.1:8000", "Unknown text")
+        assert data is None
+        assert "HTTP 404" in err
+
+    # 3. ConnectionError
+    with patch("requests.post") as mock_post:
+        mock_post.side_effect = requests.exceptions.ConnectionError("Connection refused")
+        data, err = send_oracle_request("http://127.0.0.1:8000", "Text")
+        assert data is None
+        assert "Oracle request failed" in err
+
+
+def test_send_save_failure_case_request_helpers():
+    """Test send_save_failure_case_request client function under success, HTTP error, and connection failure."""
+    payload = {
+        "run_id": "run_123",
+        "claim_id": "clm_01",
+        "failure_category": "extraction_error",
+        "researcher_note": "Boundary split issue",
+    }
+    # 1. Success
+    with patch("requests.post") as mock_post:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "failure_case_id": "fc_test",
+            "file_path": "results/failure_cases/test.json",
+            "status": "saved",
+        }
+        mock_post.return_value = mock_resp
+
+        data, err = send_save_failure_case_request("http://127.0.0.1:8000", payload)
+        assert err is None
+        assert data["status"] == "saved"
+        assert mock_post.call_args[1]["json"] == payload
+
+    # 2. HTTP 422
+    with patch("requests.post") as mock_post:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 422
+        mock_resp.json.return_value = {"detail": "Validation error"}
+        mock_post.return_value = mock_resp
+
+        data, err = send_save_failure_case_request("http://127.0.0.1:8000", payload)
+        assert data is None
+        assert "HTTP 422" in err
+
+    # 3. ConnectionError
+    with patch("requests.post") as mock_post:
+        mock_post.side_effect = requests.exceptions.ConnectionError("Connection refused")
+        data, err = send_save_failure_case_request("http://127.0.0.1:8000", payload)
+        assert data is None
+        assert "Save failure case request failed" in err
+
+
+def test_11_failure_case_ui_flow():
+    """11. UI failure case recording and single-request invariant."""
+    payload = make_synthetic_payload(
+        response_text="Marie Curie was a physicist.",
+        resolved_config={"has_gold_evidence": True, "example_id": "mini-001", "gold_label": "Supported"}
+    )
+
+    fc_calls = []
+
+    def mock_post_side_effect(*args, **kwargs):
+        url = args[0]
+        resp = MagicMock()
+        resp.status_code = 200
+        if url.endswith("/analyze"):
+            resp.json.return_value = payload
+        elif url.endswith("/reaggregate"):
+            resp.json.return_value = {
+                "run_id": kwargs["json"]["run_id"],
+                "comparisons": {"clm_01": {}}
+            }
+        elif url.endswith("/failure-cases"):
+            fc_calls.append(kwargs["json"])
+            resp.json.return_value = {
+                "failure_case_id": "fc_test_01",
+                "file_path": "results/failure_cases/20260912-clm_01.json",
+                "status": "saved",
+            }
+        return resp
+
+    with patch("requests.post") as mock_post:
+        import streamlit as st
+        st.cache_data.clear()
+
+        mock_post.side_effect = mock_post_side_effect
+
+        at = AppTest.from_file(APP_PATH).run()
+        at.text_area[0].input("Marie Curie was a physicist.").run()
+        at.button[0].click().run()
+
+        # Find Save Failure Case button
+        save_buttons = [b for b in at.button if "Save Failure Case" in b.label]
+        assert len(save_buttons) == 1
+        save_btn = save_buttons[0]
+
+        # Disabled initially because note is blank
+        assert save_btn.disabled is True
+
+        # Enter researcher note in the note text area (second text area in page)
+        note_areas = [ta for ta in at.text_area if "Researcher Note" in ta.label]
+        assert len(note_areas) == 1
+        note_areas[0].input("Observed overconfidence on distractor hit").run()
+
+        # Save button is now enabled
+        save_buttons = [b for b in at.button if "Save Failure Case" in b.label]
+        assert save_buttons[0].disabled is False
+
+        # Click save
+        save_buttons[0].click().run()
+
+        # Check that POST /failure-cases was called exactly once
+        assert len(fc_calls) == 1
+        assert fc_calls[0]["run_id"] == payload["run_id"]
+        assert fc_calls[0]["claim_id"] == "clm_01"
+        assert fc_calls[0]["failure_category"] == "unclear"
+        assert fc_calls[0]["researcher_note"] == "Observed overconfidence on distractor hit"
+
+        # Rerun UI - must issue ZERO additional requests to /failure-cases
+        at.run()
+        assert len(fc_calls) == 1
+
+        # Test edited input guard: changing response text in editor must disable save
+        at.text_area[0].input("Edited text that was not analyzed").run()
+        save_buttons = [b for b in at.button if "Save Failure Case" in b.label]
+        assert save_buttons[0].disabled is True
+

@@ -31,6 +31,8 @@ from src.api.schemas import (
     VerifyQuickResponse,
     ReaggregateRequest,
     ReaggregateResponse,
+    SaveFailureCaseRequest,
+    FailureCaseResponse,
 )
 from src.core.interfaces import ContractError
 from src.core.registry import RegistryError
@@ -352,3 +354,53 @@ async def reaggregate_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Reaggregation failed: {exc}",
         ) from exc
+
+
+@router.post(
+    "/failure-cases",
+    response_model=FailureCaseResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid relationship between runs or bad configuration"},
+        404: {"model": ErrorResponse, "description": "Run ID, claim ID, or oracle run ID not found or expired"},
+        422: {"model": ErrorResponse, "description": "Validation error or invalid failure category"},
+    },
+    summary="Save Failure Case",
+    description="Persists a structured failure case linked to server-side execution state.",
+)
+async def save_failure_case_endpoint(
+    req: SaveFailureCaseRequest,
+    service: NulliusService = Depends(get_service),
+) -> FailureCaseResponse:
+    try:
+        res = service.save_failure_case(
+            run_id=req.run_id,
+            claim_id=req.claim_id,
+            failure_category=req.failure_category,
+            researcher_note=req.researcher_note,
+            human_label=req.human_label,
+            oracle_run_id=req.oracle_run_id,
+            alternative_aggregations=req.alternative_aggregations,
+        )
+        return FailureCaseResponse(**res)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        err_msg = str(exc)
+        if "mismatched" in err_msg.lower() or "mode" in err_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=err_msg,
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=err_msg,
+        ) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to persist failure case: {exc}",
+        ) from exc
+

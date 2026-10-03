@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Nullius Inspection Harness",
+  "version": "1.0.0",
+  "description": "Research inspection instrument. Flags claim-level hallucination states.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Nullius"
+  }
+}

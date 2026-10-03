@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from src.core.trace_io import ALLOWED_FAILURE_CATEGORIES
 
 
 class SourceSpanSchema(BaseModel):
@@ -212,4 +214,36 @@ class ReaggregateResponse(BaseModel):
     comparisons: dict[str, dict[str, ClaimVerdictSchema]] = Field(
         ..., description="Comparison results grouped by claim ID and aggregator name"
     )
+
+
+class SaveFailureCaseRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str = Field(..., min_length=1, description="Source execution run ID")
+    claim_id: str = Field(..., min_length=1, description="Claim identifier to flag")
+    failure_category: str = Field(..., description="Failure category classification")
+    researcher_note: str = Field(..., min_length=1, description="Explanatory researcher note")
+    human_label: str | None = Field(None, description="Optional human ground-truth label")
+    oracle_run_id: str | None = Field(None, description="Optional oracle run ID")
+    alternative_aggregations: dict[str, Any] | None = Field(
+        None, description="Optional snapshot of reaggregation comparisons"
+    )
+
+    @field_validator("failure_category")
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        if v not in ALLOWED_FAILURE_CATEGORIES:
+            raise ValueError(
+                f"Invalid failure category {v!r}. Must be one of {sorted(ALLOWED_FAILURE_CATEGORIES)}"
+            )
+        return v
+
+
+class FailureCaseResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    failure_case_id: str = Field(..., description="Unique failure case identifier")
+    file_path: str = Field(..., description="Path to persisted failure case JSON file")
+    status: str = Field("saved", description="Status of persistence")
+
 

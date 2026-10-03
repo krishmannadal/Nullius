@@ -31,7 +31,7 @@ To maintain strict scientific validity and prevent data snooping, the benchmark 
 
 ## 2. Directory Contents
 
-- `responses.jsonl`: 30 frozen responses (10 simple-factual, 10 compound-factual, 10 mixed). Contains 15 LLM-generated, 10 human-written, and 5 adversarial texts across short, medium, and long lengths.
+- `responses.jsonl`: 30 frozen responses (10 simple-factual, 12 compound-factual, 8 mixed). Contains 15 LLM-generated, 10 human-written, and 5 adversarial texts across short, medium, and long lengths.
 - `ANNOTATION_GUIDELINES.md`: Operational rulebook for human annotators detailing claim criteria, linguistic edge cases, and protocol ambiguities.
 - `annotations_A.template.jsonl`: Empty template file for Annotator A.
 - `annotations_B.template.jsonl`: Empty template file for Annotator B.
@@ -102,3 +102,89 @@ Only after both `annotations_A.jsonl` and `annotations_B.jsonl` are submitted an
 2. Perform human adjudication of discrepant claims to produce `gold_annotations.jsonl`.
 3. Update `metadata.json` with the cryptographic hash of `gold_annotations.jsonl`.
 4. Run downstream extractor evaluation scripts against `gold_annotations.jsonl`.
+
+
+## 7. Independent annotation UI
+
+From the repository root, with the virtual environment active:
+
+```bash
+python -m streamlit run src/ui/s1_annotation.py --server.headless true --server.port 8502
+```
+
+The page loads the frozen benchmark and guidelines. Enter your own annotator ID
+and guideline version. Specify source offsets, check the displayed source slice,
+and enter each factual assertion yourself. The tool supplies no extractor hints.
+Mark each response reviewed, including any response with zero claims. Adding or
+removing a claim reopens that response for review.
+
+Download your ZIP regularly: session state is volatile. It contains
+`annotations.jsonl` and `review.json`. Resume by uploading both files into a fresh
+session using the same identity, guidelines and benchmark. Resume verifies the
+annotation and response hashes. The app cannot authenticate an annotator or prove
+independence: keep A and B's files and sessions separate yourself. It never writes
+an annotation, gold file, or model cache into the benchmark directory.
+
+After extracting each ZIP into separate local directories:
+
+```bash
+python -m scripts.validate_s1_annotations /path/to/A/annotations.jsonl \
+  --annotator-id A --review /path/to/A/review.json --require-complete --show-spans
+```
+
+`--require-complete` needs the review record. Merely having claims for a response
+cannot distinguish a reviewed zero-claim response from an unfinished response.
+Validation checks structure and completion records, not human claim correctness.
+The existing positional validator command remains supported.
+
+## 8. Agreement review after both annotators finish
+
+Only after independent annotation is complete, an adjudicator can run:
+
+```bash
+python -m src.eval.agreement \
+  --responses data/eval/s1/responses.jsonl \
+  --expected-sha256 8ef976d32392724acb468821a0314787b7e3c6c563e3556381e6b1a5e1672356 \
+  --annotations-a /path/to/A/annotations.jsonl --review-a /path/to/A/review.json \
+  --annotations-b /path/to/B/annotations.jsonl --review-b /path/to/B/review.json \
+  --output /path/to/new-agreement-review.json
+```
+
+The report preserves all annotations and source text. Normalized exact matching
+and token F1 >= 0.8 propose candidate pairs; maximum-weight bipartite matching
+suggests one-to-one pairs. Every human decision remains blank. Unmatched claims
+are visible and must also be reviewed; lexical similarity can hide opposite
+polarity. The report never resolves disagreement or creates gold.
+
+Count agreement uses Krippendorff interval alpha with responses as units and
+atomic annotation counts as the measurement, including reviewed zero-claim
+responses. No variation yields undefined alpha (`null`), not perfect agreement.
+Equal counts are not semantic claim agreement. Claim-presence Cohen's kappa is
+not calculated: a shared claim universe and explicit absence decisions still
+need a defined, human-coded protocol. Do not infer that the S1 agreement gates
+passed from lexical candidate counts or count alpha alone.
+
+## 9. Integrity and remaining research gates
+
+The original handoff SHA-256 (`cd875b...`) covers CRLF file bytes. Git's existing
+`.gitattributes` stores this JSONL with LF endings; its byte hash is `8ef976d...`.
+Metadata now records both hashes and the reason. Response strings and IDs were
+not changed. Hashes always cover exact bytes; tools do not silently normalize
+uploaded files.
+
+All 30 records have `provenance: synthetic-s1`. Their source-type labels are not
+proof of actual human authorship or LLM generation. Establish original sources
+before making source-subgroup scientific claims. The benchmark can still be
+used for annotation-tool practice. This work does not certify its scientific
+provenance or resolve the guideline ambiguities in Section 5 of the guidelines.
+
+The LLM-cache script has no provider implementation and now exits nonzero
+without writing placeholder outputs. Evaluation refuses missing or unfrozen
+gold. Candidate generation additionally requires a real frozen LLM cache with `llm_cache_hash_sha256`,
+`llm_cache_model`, `llm_cache_prompt_version` and `llm_cache_frozen_date` in
+metadata, never
+overwrites an existing review CSV, and leaves unmatched decisions blank. Final
+extractor metrics remain unimplemented and fail explicitly rather than reporting
+success. Human annotation, agreement review, human adjudication, gold freezing,
+real provider integration and final metrics are still outstanding. No S1
+predictions or metrics were generated by this change.

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Deterministic mechanical validator for Nullius S1 Human Annotation files.
 
 Validates annotations_A.jsonl and annotations_B.jsonl against the approved
@@ -18,9 +17,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.eval.s1_annotations import (
+    load_responses as load_response_bytes,
+)
+from src.eval.s1_annotations import (
+    read_jsonl,
+    validate_review,
+)
 
 
 class AnnotationValidationError:
@@ -50,27 +59,7 @@ def load_responses(responses_path: Path) -> dict[str, str]:
     if not responses_path.exists():
         raise FileNotFoundError(f"Responses file not found: {responses_path}")
 
-    responses: dict[str, str] = {}
-    with open(responses_path, "r", encoding="utf-8") as f:
-        for idx, line in enumerate(f, 1):
-            line_str = line.strip()
-            if not line_str:
-                continue
-            try:
-                data = json.loads(line_str)
-            except json.JSONDecodeError as err:
-                raise ValueError(f"Malformed JSON in responses file at line {idx}: {err}") from err
-
-            resp_id = data.get("response_id")
-            text = data.get("text")
-            if not isinstance(resp_id, str) or not resp_id:
-                raise ValueError(f"Missing or invalid response_id at line {idx} in {responses_path}")
-            if not isinstance(text, str):
-                raise ValueError(f"Missing or invalid text for response_id '{resp_id}' at line {idx}")
-
-            responses[resp_id] = text
-
-    return responses
+    return load_response_bytes(responses_path.read_bytes())
 
 
 def validate_annotations(
@@ -109,10 +98,13 @@ def validate_annotations(
     for line_no, raw_line in enumerate(lines, 1):
         line_str = raw_line.strip()
         if not line_str:
-            warnings.append(AnnotationValidationWarning(line_no, None, "Empty/whitespace line ignored."))
+            warnings.append(
+                AnnotationValidationWarning(line_no, None, "Empty/whitespace line ignored.")
+            )
             continue
 
         stats["total_records"] += 1
+        previous_error_count = len(errors)
 
         try:
             record = json.loads(line_str)
@@ -121,31 +113,61 @@ def validate_annotations(
             continue
 
         if not isinstance(record, dict):
-            errors.append(AnnotationValidationError(line_no, None, f"Record must be a JSON object, got {type(record).__name__}"))
+            errors.append(
+                AnnotationValidationError(
+                    line_no, None, f"Record must be a JSON object, got {type(record).__name__}"
+                )
+            )
             continue
 
         claim_id = record.get("claim_id")
         claim_id_str = str(claim_id) if claim_id is not None else None
 
         # 1. Validate required fields existence
-        required_fields = ["response_id", "claim_id", "claim_text", "source_span", "decomposed", "hedged"]
+        required_fields = [
+            "response_id",
+            "claim_id",
+            "claim_text",
+            "source_span",
+            "decomposed",
+            "hedged",
+            "annotator_id",
+        ]
         missing_fields = [field for field in required_fields if field not in record]
         if missing_fields:
-            errors.append(AnnotationValidationError(line_no, claim_id_str, f"Missing required fields: {missing_fields}"))
+            errors.append(
+                AnnotationValidationError(
+                    line_no, claim_id_str, f"Missing required fields: {missing_fields}"
+                )
+            )
             continue
 
         # 2. Validate claim_id uniqueness
         if not isinstance(claim_id, str) or not claim_id.strip():
-            errors.append(AnnotationValidationError(line_no, None, "Field 'claim_id' must be a non-empty string."))
+            errors.append(
+                AnnotationValidationError(
+                    line_no, None, "Field 'claim_id' must be a non-empty string."
+                )
+            )
         elif claim_id in seen_claim_ids:
-            errors.append(AnnotationValidationError(line_no, claim_id, f"Duplicate claim_id '{claim_id}' detected."))
+            errors.append(
+                AnnotationValidationError(
+                    line_no, claim_id, f"Duplicate claim_id '{claim_id}' detected."
+                )
+            )
         else:
             seen_claim_ids.add(claim_id)
 
         # 3. Validate annotator_id if present or expected
         annotator_id = record.get("annotator_id")
-        if annotator_id is not None and not isinstance(annotator_id, str):
-            errors.append(AnnotationValidationError(line_no, claim_id_str, f"Field 'annotator_id' must be a string, got {type(annotator_id).__name__}"))
+        if not isinstance(annotator_id, str) or not annotator_id.strip():
+            errors.append(
+                AnnotationValidationError(
+                    line_no,
+                    claim_id_str,
+                    f"Field 'annotator_id' must be a string, got {type(annotator_id).__name__}",
+                )
+            )
         elif expected_annotator_id and annotator_id != expected_annotator_id:
             errors.append(
                 AnnotationValidationError(
@@ -155,10 +177,19 @@ def validate_annotations(
                 )
             )
 
+        if not isinstance(record.get("notes", ""), str):
+            errors.append(
+                AnnotationValidationError(line_no, claim_id_str, "Field 'notes' must be a string.")
+            )
+
         # 4. Validate response_id
         response_id = record.get("response_id")
         if not isinstance(response_id, str) or not response_id.strip():
-            errors.append(AnnotationValidationError(line_no, claim_id_str, "Field 'response_id' must be a non-empty string."))
+            errors.append(
+                AnnotationValidationError(
+                    line_no, claim_id_str, "Field 'response_id' must be a non-empty string."
+                )
+            )
             continue
 
         if response_id not in responses:
@@ -172,21 +203,36 @@ def validate_annotations(
             continue
 
         response_text = responses[response_id]
-        stats["responses_covered"].add(response_id)
 
         # 5. Validate claim_text
         claim_text = record.get("claim_text")
         if not isinstance(claim_text, str) or not claim_text.strip():
-            errors.append(AnnotationValidationError(line_no, claim_id_str, "Field 'claim_text' must be a non-empty string."))
+            errors.append(
+                AnnotationValidationError(
+                    line_no, claim_id_str, "Field 'claim_text' must be a non-empty string."
+                )
+            )
 
         # 6. Validate booleans strictly
         decomposed = record.get("decomposed")
         if not isinstance(decomposed, bool):
-            errors.append(AnnotationValidationError(line_no, claim_id_str, f"Field 'decomposed' must be a boolean, got {type(decomposed).__name__}"))
+            errors.append(
+                AnnotationValidationError(
+                    line_no,
+                    claim_id_str,
+                    f"Field 'decomposed' must be a boolean, got {type(decomposed).__name__}",
+                )
+            )
 
         hedged = record.get("hedged")
         if not isinstance(hedged, bool):
-            errors.append(AnnotationValidationError(line_no, claim_id_str, f"Field 'hedged' must be a boolean, got {type(hedged).__name__}"))
+            errors.append(
+                AnnotationValidationError(
+                    line_no,
+                    claim_id_str,
+                    f"Field 'hedged' must be a boolean, got {type(hedged).__name__}",
+                )
+            )
 
         if isinstance(decomposed, bool) and decomposed:
             stats["decomposed_count"] += 1
@@ -197,7 +243,13 @@ def validate_annotations(
         source_span = record.get("source_span")
         span_valid = True
         if not isinstance(source_span, dict):
-            errors.append(AnnotationValidationError(line_no, claim_id_str, f"Field 'source_span' must be a dict, got {type(source_span).__name__}"))
+            errors.append(
+                AnnotationValidationError(
+                    line_no,
+                    claim_id_str,
+                    f"Field 'source_span' must be a dict, got {type(source_span).__name__}",
+                )
+            )
             span_valid = False
         else:
             start = source_span.get("start")
@@ -205,19 +257,39 @@ def validate_annotations(
 
             # Check exact integer type without bools (since isinstance(True, int) is True in Python)
             if not isinstance(start, int) or isinstance(start, bool):
-                errors.append(AnnotationValidationError(line_no, claim_id_str, f"source_span.start must be an integer, got {start!r}"))
+                errors.append(
+                    AnnotationValidationError(
+                        line_no,
+                        claim_id_str,
+                        f"source_span.start must be an integer, got {start!r}",
+                    )
+                )
                 span_valid = False
             if not isinstance(end, int) or isinstance(end, bool):
-                errors.append(AnnotationValidationError(line_no, claim_id_str, f"source_span.end must be an integer, got {end!r}"))
+                errors.append(
+                    AnnotationValidationError(
+                        line_no, claim_id_str, f"source_span.end must be an integer, got {end!r}"
+                    )
+                )
                 span_valid = False
 
             if span_valid:
                 resp_len = len(response_text)
                 if start < 0:
-                    errors.append(AnnotationValidationError(line_no, claim_id_str, f"source_span.start must be >= 0, got {start}"))
+                    errors.append(
+                        AnnotationValidationError(
+                            line_no, claim_id_str, f"source_span.start must be >= 0, got {start}"
+                        )
+                    )
                     span_valid = False
                 if end <= start:
-                    errors.append(AnnotationValidationError(line_no, claim_id_str, f"source_span.end ({end}) must be strictly greater than start ({start})"))
+                    errors.append(
+                        AnnotationValidationError(
+                            line_no,
+                            claim_id_str,
+                            f"source_span.end ({end}) must be strictly greater than start ({start})",
+                        )
+                    )
                     span_valid = False
                 if end > resp_len:
                     errors.append(
@@ -248,22 +320,21 @@ def validate_annotations(
                 )
 
             # Check verbatim vs decomposed consistency
-            if not decomposed:
-                # For non-decomposed claims, warn if claim text differs from the extracted slice
-                if claim_text != extracted_slice:
-                    warnings.append(
-                        AnnotationValidationWarning(
-                            line_no,
-                            claim_id_str,
-                            f"Claim has decomposed=false, but claim_text != response_text[start:end].\n"
-                            f"  claim_text:    {claim_text!r}\n"
-                            f"  response_span: {extracted_slice!r}\n"
-                            f"  (If the claim was edited, trimmed, or had pronouns resolved, set decomposed=true)",
-                        )
+            if not decomposed and claim_text != extracted_slice:
+                warnings.append(
+                    AnnotationValidationWarning(
+                        line_no,
+                        claim_id_str,
+                        f"Claim has decomposed=false, but claim_text != response_text[start:end].\n"
+                        f"  claim_text:    {claim_text!r}\n"
+                        f"  response_span: {extracted_slice!r}\n"
+                        f"  (If the claim was edited, trimmed, or had pronouns resolved, set decomposed=true)",
                     )
+                )
 
-        if not errors or len(errors) == 0:
+        if len(errors) == previous_error_count:
             stats["valid_records"] += 1
+            stats["responses_covered"].add(response_id)
 
     stats["unique_claims"] = len(seen_claim_ids)
     return errors, warnings, stats
@@ -287,15 +358,18 @@ def format_report(
     lines.append(f"Responses file:  {responses_path}")
     lines.append("-" * 70)
 
-    if stats["total_records"] == 0:
+    if stats["total_records"] == 0 and not errors:
         lines.append("STATUS: EMPTY FILE (0 records found)")
         lines.append("This file is currently empty or contains only whitespace.")
         lines.append("=" * 70)
         return "\n".join(lines)
 
     lines.append(f"Total records parsed:    {stats['total_records']}")
+    lines.append(f"Structurally valid records: {stats['valid_records']}")
     lines.append(f"Unique claim IDs:        {stats['unique_claims']}")
-    lines.append(f"Responses covered:       {len(stats['responses_covered'])} / {total_expected_responses}")
+    lines.append(
+        f"Responses covered:       {len(stats['responses_covered'])} / {total_expected_responses}"
+    )
     lines.append(f"Decomposed claims:       {stats['decomposed_count']}")
     lines.append(f"Hedged claims:           {stats['hedged_count']}")
     lines.append(f"Errors detected:         {len(errors)}")
@@ -304,7 +378,9 @@ def format_report(
 
     missing_responses = total_expected_responses - len(stats["responses_covered"])
     if missing_responses > 0:
-        lines.append(f"NOTE: {missing_responses} responses in responses.jsonl do not have annotations in this file yet.")
+        lines.append(
+            f"NOTE: {missing_responses} responses in responses.jsonl do not have annotations in this file yet."
+        )
 
     if show_spans and stats["inspected_records"]:
         lines.append("")
@@ -367,12 +443,23 @@ def main() -> int:
         action="store_true",
         help="Display exact response_text[start:end] slice alongside claim_text for human inspection",
     )
+    parser.add_argument("--expected-sha256", help="Frozen benchmark byte SHA-256")
+    parser.add_argument(
+        "--review", type=Path, help="Completion/provenance JSON exported by annotation UI"
+    )
+    parser.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="Require every response to be explicitly reviewed",
+    )
 
     args = parser.parse_args()
 
     try:
         responses = load_responses(args.responses)
-    except Exception as err:
+        if args.expected_sha256:
+            load_response_bytes(args.responses.read_bytes(), args.expected_sha256)
+    except (OSError, ValueError) as err:
         print(f"Error loading responses file: {err}", file=sys.stderr)
         return 1
 
@@ -382,6 +469,29 @@ def main() -> int:
         expected_annotator_id=args.annotator_id,
         show_spans=args.show_spans,
     )
+
+    try:
+        if args.require_complete and args.review is None:
+            raise ValueError(
+                "--require-complete needs --review; claim coverage cannot prove zero-claim reviews"
+            )
+        if args.review is not None:
+            review = json.loads(args.review.read_text(encoding="utf-8"))
+            if not isinstance(review, dict):
+                raise ValueError("review must be a JSON object")
+            data = args.annotation_file.read_bytes()
+            validate_review(
+                review,
+                args.responses.read_bytes(),
+                responses,
+                data,
+                read_jsonl(data, "annotations"),
+                args.require_complete,
+            )
+            if args.annotator_id and review["annotator_id"] != args.annotator_id:
+                raise ValueError("review annotator differs from --annotator-id")
+    except (OSError, ValueError) as err:
+        errors.append(AnnotationValidationError(0, None, str(err)))
 
     report = format_report(
         annotation_path=args.annotation_file,
@@ -393,6 +503,10 @@ def main() -> int:
         show_spans=args.show_spans,
     )
     print(report)
+    if args.require_complete and not errors:
+        print(
+            "Completion verified: all response IDs explicitly reviewed, including zero-claim responses."
+        )
 
     return 1 if errors else 0
 

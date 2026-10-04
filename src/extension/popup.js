@@ -4,6 +4,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pasteDetails = document.getElementById('paste-details');
   const pasteInput = document.getElementById('paste-input');
   const pasteBtn = document.getElementById('paste-btn');
+  const pasteSelectionBtn = document.getElementById('paste-selection-btn');
+  const scopeSelect = document.getElementById('scope-select');
+  const scopeHelp = document.getElementById('scope-help');
   const quickBtn = document.getElementById('quick-btn');
   const fullBtn = document.getElementById('full-btn');
   const refreshBtn = document.getElementById('refresh-btn');
@@ -17,9 +20,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     quick: 'http://127.0.0.1:8000/verify/quick',
     full: 'http://127.0.0.1:8000/verify/full'
   };
-  const timeouts = { quick: 5000, full: 60000 };
+  const timeouts = { quick: 5000, full: 60000, chatQuick: 15000, chatFull: 180000 };
   let capturedText = null;
   let captureSource = null;
+  let captureScope = null;
+  let capturedMessageCount = null;
   let busy = false;
   let inspection = null;
   let comparison = null;
@@ -45,6 +50,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     connectionBtn.disabled = value;
     pasteBtn.disabled = value;
     pasteInput.disabled = value;
+    pasteSelectionBtn.disabled = value;
+    scopeSelect.disabled = value;
     compareBtn.disabled = value || comparisonExpired || inspection?.kind !== 'full' ||
       !inspection.data.run_id || !inspection.data.config_hash || !inspection.data.claims.length;
     exportBtn.disabled = value || !inspection;
@@ -58,19 +65,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     resultsArea.replaceChildren();
   }
 
-  async function captureLatest() {
+  function describeScope() {
+    const descriptions = {
+      chat: 'All loaded ChatGPT answers in this conversation. Scroll up to load earlier answers before capturing.',
+      latest: 'The full text of the latest completed ChatGPT answer.',
+      selection: 'Highlight a passage in a completed ChatGPT answer before opening Nullius. Only that passage is inspected.',
+      pasted: 'Inspect the pasted text shown in the preview. Choose another scope to return to ChatGPT.'
+    };
+    scopeHelp.textContent = descriptions[scopeSelect.value];
+  }
+
+  async function capturePage() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !tab.url || !['chatgpt.com', 'chat.openai.com'].includes(new URL(tab.url).hostname)) {
-      throw new Error('Open a conversation on chatgpt.com, then click Refresh response.');
+      throw new Error('Open a conversation on chatgpt.com, then click Refresh preview.');
     }
-    const frames = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    const scope = scopeSelect.value;
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    const frames = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: selectedScope => globalThis.__nulliusCapture(selectedScope),
+      args: [scope]
+    });
     const response = frames.find(frame => frame.frameId === 0)?.result;
     if (!response?.success || typeof response.text !== 'string' || !response.text.trim()) {
       throw new Error(response?.error || 'Could not capture the latest ChatGPT answer. Refresh the page and try again.');
     }
     capturedText = response.text;
     captureSource = 'chatgpt-page';
-    sourceLabel.textContent = 'Latest ChatGPT answer';
+    captureScope = scope;
+    capturedMessageCount = Number.isInteger(response.message_count) ? response.message_count : null;
+    sourceLabel.textContent = scope === 'chat' ? `Complete chat · ${capturedMessageCount ?? 'all loaded'} ChatGPT answers` :
+      scope === 'latest' ? 'Latest ChatGPT answer · full text' : 'Selected ChatGPT passage only';
     previewBox.textContent = capturedText;
     return capturedText;
   }
@@ -81,10 +107,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearInspection();
     capturedText = null;
     captureSource = null;
+    captureScope = null;
+    capturedMessageCount = null;
     sourceLabel.textContent = '';
     statusArea.style.display = 'none';
     try {
-      await captureLatest();
+      if (scopeSelect.value === 'pasted') scopeSelect.value = 'chat';
+      describeScope();
+      await capturePage();
     } catch (error) {
       capturedText = null;
       previewBox.textContent = error.message;
@@ -106,10 +136,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     let stage = 'capture';
     try {
       // Page checks recapture; an explicitly chosen pasted answer keeps its previewed snapshot.
-      const text = captureSource === 'pasted-answer' ? capturedText : await captureLatest();
+      const text = captureSource === 'pasted-answer' ? capturedText : await capturePage();
       stage = 'backend';
       const controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), timeouts[kind]);
+      const timeout = captureScope === 'chat' ?
+        (kind === 'quick' ? timeouts.chatQuick : timeouts.chatFull) : timeouts[kind];
+      timeoutId = setTimeout(() => controller.abort(), timeout);
       const response = await fetch(endpoints[kind], {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -128,7 +160,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           (kind === 'full' && (!Array.isArray(data.verdicts) || !data.evidence_by_claim))) {
         throw new Error('Backend returned an invalid inspection response. Update and restart Nullius.');
       }
-      inspection = { kind, captured_text: text, capture_source: captureSource, data };
+      inspection = { kind, captured_text: text, capture_source: captureSource,
+        analysis_scope: captureScope, message_count: capturedMessageCount, data };
       if (kind === 'quick') renderQuickResults(data);
       else renderFullResults(data);
       showStatus(kind === 'quick' ?
@@ -139,12 +172,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (stage === 'capture') {
         capturedText = null;
         captureSource = null;
+        captureScope = null;
+        capturedMessageCount = null;
         sourceLabel.textContent = '';
         previewBox.textContent = error.message;
         pasteDetails.open = true;
         showStatus(error.message, true);
       } else if (error.name === 'AbortError') {
-        showStatus('Request timed out. First-time model loading can take longer; warm the backend and try again. Closing this request does not stop backend computation.', true);
+        showStatus(captureScope === 'chat' ?
+          'Complete chat check timed out. Try Latest response or Selected text, and warm the backend for Full Inspection. Closing this request does not stop backend computation.' :
+          'Request timed out. First-time model loading can take longer; warm the backend and try again. Closing this request does not stop backend computation.', true);
       } else if (error instanceof TypeError) {
         showStatus('Cannot connect to Nullius. Start the local backend on this computer at 127.0.0.1:8000, then use Test connection.', true);
       } else {
@@ -280,6 +317,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       inspection_kind: inspection.kind,
       captured_text: inspection.captured_text,
       capture_source: inspection.capture_source,
+      analysis_scope: inspection.analysis_scope,
+      captured_message_count: inspection.message_count,
       original_result: inspection.data,
       comparison_request: comparison ? { target_aggregators: rules, aggregator_configs: {} } : null,
       rule_comparison: comparison,
@@ -295,20 +334,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     showStatus('Inspection exported locally. The file contains the captured answer; share it only when appropriate.');
   });
 
-  pasteBtn.addEventListener('click', () => {
+  function usePaste(selectedOnly) {
     if (busy) return;
-    if (!pasteInput.value.trim()) {
-      showStatus('Paste a completed answer first. The current preview has not changed.', true);
+    const text = selectedOnly ? pasteInput.value.slice(pasteInput.selectionStart, pasteInput.selectionEnd) : pasteInput.value;
+    if (!text.trim()) {
+      showStatus(selectedOnly ? 'Highlight a passage in the paste box first. The current preview has not changed.' :
+        'Paste a completed answer first. The current preview has not changed.', true);
       return;
     }
     clearInspection();
-    capturedText = pasteInput.value;
+    capturedText = text;
     captureSource = 'pasted-answer';
+    captureScope = selectedOnly ? 'pasted-selection' : 'pasted-full';
+    capturedMessageCount = null;
+    scopeSelect.querySelector('[value="pasted"]').hidden = false;
+    scopeSelect.value = 'pasted';
+    describeScope();
     previewBox.textContent = capturedText;
-    sourceLabel.textContent = 'Pasted answer · Refresh response switches back to ChatGPT';
-    showStatus('Pasted answer ready. Choose Quick Check or Full Inspection to send this preview to your local backend.');
+    sourceLabel.textContent = selectedOnly ? 'Pasted answer · selected part only' : 'Pasted answer · entire text';
+    showStatus('Preview ready. Choose Quick Check or Full Inspection to inspect this text. Refresh preview returns to Complete chat.');
     setBusy(false);
-  });
+  }
+  pasteBtn.addEventListener('click', () => usePaste(false));
+  pasteSelectionBtn.addEventListener('click', () => usePaste(true));
+  scopeSelect.addEventListener('change', refresh);
   refreshBtn.addEventListener('click', refresh);
   quickBtn.addEventListener('click', () => inspect('quick'));
   fullBtn.addEventListener('click', () => inspect('full'));
@@ -331,6 +380,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       setBusy(false);
     }
   });
+  scopeSelect.value = 'chat';
   await refresh();
 
   // 4. Render Quick Check results (restored F1 behavior)

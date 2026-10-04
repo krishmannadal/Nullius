@@ -1,7 +1,8 @@
 # Nullius for ChatGPT
 
-A Chrome Manifest V3 extension for inspecting the latest completed answer on
-`chatgpt.com` (also recognizes `chat.openai.com`). It shows results in its popup.
+A Chrome Manifest V3 extension for inspecting ChatGPT answers on `chatgpt.com`
+(also recognizes `chat.openai.com`). It shows results in its popup and defaults
+to **Complete chat**, collecting all loaded assistant answers in the current conversation.
 The extension captures text only after you open it. Only clicking **Quick Check**
 or **Full Inspection** sends that text to the local backend. **Compare rules**
 sends only the stored run ID and rule settings; exports stay on your computer. It does not edit the
@@ -55,7 +56,7 @@ only a cloud backend does not connect your local Chrome to it.
    (the folder directly containing `manifest.json`).
 4. Pin Nullius using Chrome's extensions menu.
 5. Open a ChatGPT conversation and wait for the answer to finish.
-6. Click Nullius, check **Response Preview**, and choose **Test connection**.
+6. Click Nullius, choose an analysis scope, check **Analysis preview**, and choose **Test connection**.
 7. Click **Quick Check** or **Full Inspection**, keeping the popup open until done.
 
 If you use the release ZIP, extract it first and load the extracted folder that
@@ -63,21 +64,45 @@ contains `manifest.json`. A ZIP alone cannot be loaded using **Load unpacked**.
 This is a developer installation, not a Chrome Web Store release.
 
 After pulling an update, click the extension's **Reload** button in
-`chrome://extensions`, then reload your ChatGPT tab. **Refresh response** updates
+`chrome://extensions`, then reload your ChatGPT tab. **Refresh preview** updates
 the snapshot in an already-open popup. Each check of a page-captured answer captures
-the latest answer again, so it does not silently send an older answer after the
-conversation changes. Capture uses a one-time script result, with no persistent
-message listeners that can retain an older adapter after an update.
+the chosen scope again, so it does not silently send an older snapshot after the
+conversation changes. The adapter is reinstalled on each capture and returns a
+one-time script result, with no persistent message listeners.
+
+## Choose what to analyze
+
+- **Complete chat (default):** all loaded ChatGPT answers in the current conversation,
+  in order, with your prompts and page controls excluded. This default is restored
+  whenever the popup opens. Scroll up in ChatGPT to load older answers before
+  capturing; the extension cannot inspect unloaded history, other chats or hidden
+  answer branches. The preview shows how many answers were captured.
+- **Latest response · full text:** the complete latest assistant answer.
+- **Selected text only:** highlight a passage inside one completed ChatGPT answer
+  before opening the extension, then choose this scope. Only the highlighted text
+  is submitted. Missing selections, prompts, controls and selections spanning
+  multiple answers are rejected, with no fallback to full-chat submission.
+
+Changing scopes refreshes the preview and clears previous results and exports.
+It sends no text to the backend until you click a check. Full-chat and latest
+checks wait for generation to finish; a selection in an earlier completed answer
+can be inspected while a later answer is generating. Complete chat allows up to
+15 seconds for Quick Check and three minutes for Full Inspection; other scopes
+allow five seconds and one minute respectively. Keep the popup open until done.
+Long chats may still time out; use a smaller scope or prepare the NLI model first.
 
 ## If the answer is not detected
 
 Open **Paste answer instead**, copy the completed answer from ChatGPT, paste it,
-and click **Use pasted answer**. Check **Response Preview**, then click **Quick
+and click **Use entire pasted text**. Alternatively, highlight a passage in the
+paste box and click **Use selected pasted part**. Check **Analysis preview**, then click **Quick
 Check** or **Full Inspection**. Pasting and selecting text make no backend request.
 Checks use that selected snapshot; editing the paste box does not change the
-preview until you click **Use pasted answer** again. The preview identifies pasted
+preview until you use one of those buttons again. The preview identifies pasted
 text and exports record `capture_source: "pasted-answer"` rather than
-`"chatgpt-page"`. **Refresh response** switches back to automatic page capture.
+`"chatgpt-page"`, plus `analysis_scope: "pasted-full"` or `"pasted-selection"`.
+The scope control displays **Pasted text** while this snapshot is active. Choose
+another scope to return to ChatGPT; **Refresh preview** returns to Complete chat.
 The paste box and selected snapshot disappear when the popup closes.
 
 ## What the results mean
@@ -125,22 +150,24 @@ Click **Export inspection JSON** after either kind of check. The download keeps:
   evidence and pairwise scores when returned by Full Inspection.
 - Validated rule comparisons and their requested settings, when available.
 - Export timestamp, extension version and a research-use notice.
+- Analysis scope (`chat`, `latest`, `selection`, `pasted-full`, `pasted-selection`)
+  and the captured answer count for page captures. Pasted text has no inferred message count.
 
 An export is an inspection snapshot, not human annotation, adjudicated gold or
 evaluation metrics. It includes the captured answer, so review its content before
-sharing. Nothing is uploaded by the export action. **Refresh response** or a new
+sharing. Nothing is uploaded by the export action. **Refresh preview**, a scope change or a new
 check clears the previous inspection and comparison to prevent stale exports.
 Closing the popup loses local state; download your inspection before closing.
 
 ## Troubleshooting and manual smoke test
 
 - **No answer found:** open a conversation containing an assistant answer, reload
-  ChatGPT after extension updates, and click Refresh response. ChatGPT's DOM can
+  ChatGPT after extension updates, and click Refresh preview. ChatGPT's DOM can
   change; the adapter recognizes explicit assistant message/turn markers and the
   English "ChatGPT said:" conversation heading, including `display:contents`
   wrappers. It does not guess that arbitrary markdown is an assistant answer.
   If automatic capture still fails, use **Paste answer instead**.
-- **Still generating:** wait for ChatGPT to finish, then Refresh response.
+- **Still generating:** wait for ChatGPT to finish, then Refresh preview.
 - **Cannot connect:** start the backend locally; check its terminal for dependency,
   model-download or port-in-use errors. Test connection checks API availability,
   not successful model inference.
@@ -150,11 +177,15 @@ Closing the popup loses local state; download your inspection before closing.
 
 On your real Chrome profile, check a completed ChatGPT answer, start another answer
 while the popup is open and confirm streaming is blocked, then refresh after it
-finishes. Confirm the new text appears in the preview. Try both checks; compare
+finishes. Confirm Complete chat captures all loaded answers in order without prompts,
+Latest response captures only the latest full answer, and Selected text captures
+exactly the highlighted passage. With no selection, confirm that scope disables
+checks instead of falling back to the entire chat. Try both checks; compare
 the full evidence IDs and scores with the backend. Then compare rules and export
 the JSON, checking that the run IDs and pairwise scores remain identical. Also
-select a pasted answer, confirm its preview and exported source, and click Refresh
-response to return to the latest ChatGPT answer. Stop the backend and confirm
+select a pasted answer and a highlighted part in the paste box, confirm their
+previews and exported scopes, and click Refresh preview to return to Complete chat.
+Stop the backend and confirm
 Test connection displays an error. Never use these smoke checks as scientific
 benchmark results.
 

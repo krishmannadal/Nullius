@@ -51,11 +51,76 @@ class ChatGPTCaptureTests(BrowserTests):
         )
         self.page.goto("https://chatgpt.com/c/fixture")
 
-    def capture(self):
-        return self.page.evaluate((EXTENSION / "content.js").read_text())
+    def capture(self, scope="latest"):
+        self.page.evaluate((EXTENSION / "content.js").read_text())
+        return self.page.evaluate("scope => window.__nulliusCapture(scope)", scope)
+
+    def select_text(self, selector, start, end):
+        self.page.locator(selector).evaluate("""(node, offsets) => {
+          const range = document.createRange();
+          range.setStart(node.firstChild, offsets[0]); range.setEnd(node.firstChild, offsets[1]);
+          const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        }""", [start, end])
+
+    def test_default_scope_includes_all_answers_in_order_without_prompts(self):
+        self.page.evaluate((EXTENSION / "content.js").read_text())
+        result = self.page.evaluate("() => window.__nulliusCapture()")
+        self.assertEqual(result, {"success": True, "text": "Old answer.\n\nLatest answer.", "scope": "chat", "message_count": 2})
+
+    def test_complete_chat_deduplicates_nested_roles_but_keeps_repeated_answers(self):
+        self.page.set_content('''<article data-turn="assistant"><div data-message-author-role="assistant">
+          <div class="markdown">Same answer.</div></div></article>
+          <article data-turn="assistant"><div data-message-author-role="assistant">
+          <div class="markdown">Same answer.</div></div></article>''')
+        result = self.capture("chat")
+        self.assertEqual(result["text"], "Same answer.\n\nSame answer.")
+        self.assertEqual(result["message_count"], 2)
+
+    def test_complete_chat_does_not_skip_empty_earlier_answer(self):
+        self.page.locator('div[data-message-author-role="assistant"] .markdown').evaluate("node => node.textContent = ''")
+        self.assertFalse(self.capture("chat")["success"])
+        self.assertTrue(self.capture("latest")["success"])
+
+    def test_selected_text_is_exact_substring_of_one_answer(self):
+        self.select_text("section .markdown", 2, 9)
+        result = self.capture("selection")
+        self.assertEqual(result, {"success": True, "text": "test an", "scope": "selection", "message_count": 1})
+
+    def test_missing_or_user_selection_does_not_fall_back_to_complete_chat(self):
+        self.assertFalse(self.capture("selection")["success"])
+        self.select_text('[data-message-author-role="user"]', 0, 8)
+        self.assertFalse(self.capture("selection")["success"])
+
+    def test_selection_spanning_answers_is_rejected(self):
+        self.page.evaluate("""() => {
+          const bodies = document.querySelectorAll('.markdown'); const range = document.createRange();
+          range.setStart(bodies[0].firstChild, 0); range.setEnd(bodies[1].firstChild, 6);
+          window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+        }""")
+        self.assertFalse(self.capture("selection")["success"])
+
+    def test_selection_of_answer_controls_is_rejected(self):
+        self.select_text("section button", 0, 4)
+        self.assertFalse(self.capture("selection")["success"])
+
+    def test_selection_of_role_heading_is_not_answer_body_text(self):
+        self.page.locator("section").evaluate("node => node.insertAdjacentHTML('afterbegin', '<h6>ChatGPT said:</h6>')")
+        self.select_text("section h6", 0, 7)
+        self.assertFalse(self.capture("selection")["success"])
+
+    def test_selection_in_streaming_answer_is_blocked_but_earlier_answer_is_allowed(self):
+        self.page.evaluate("document.body.insertAdjacentHTML('beforeend', '<button data-testid=stop-button>Stop</button>')")
+        self.select_text("section .markdown", 0, 6)
+        self.assertFalse(self.capture("selection")["success"])
+        self.select_text('div[data-message-author-role="assistant"] .markdown', 0, 3)
+        self.assertEqual(self.capture("selection")["text"], "Old")
+        self.assertFalse(self.capture("chat")["success"])
+
+    def test_unknown_scope_is_rejected(self):
+        self.assertFalse(self.capture("unknown")["success"])
 
     def test_latest_answer_excludes_toolbar_and_user_text(self):
-        self.assertEqual(self.capture(), {"success": True, "text": "Latest answer."})
+        self.assertEqual(self.capture(), {"success": True, "text": "Latest answer.", "scope": "latest", "message_count": 1})
 
     def test_repeat_injection_returns_fresh_snapshot_without_listeners(self):
         self.page.evaluate("""() => {
@@ -153,14 +218,18 @@ class PopupTests(BrowserTests):
         self.page.add_init_script("""
           window.testCapture = {success:true,text:'Initial answer.'};
           window.injectionCount = 0;
+          window.requestedScopes = [];
           window.chrome = {
             tabs: {
               query: async () => [{id:7,url:'https://chatgpt.com/c/fixture'}]
             },
-            scripting: {executeScript: async () => {
-              window.injectionCount++; return [{frameId:0,result:window.testCapture}];
+            scripting: {executeScript: async options => {
+              window.injectionCount++;
+              if (options.files) return [{frameId:0}];
+              window.requestedScopes.push(options.args[0]);
+              return [{frameId:0,result:window.testCaptures?.[options.args[0]] || window.testCapture}];
             }},
-            runtime: {getManifest: () => ({version:'1.2.1'})}
+            runtime: {getManifest: () => ({version:'1.3.0'})}
           };
         """)
         self.page.route(
@@ -229,6 +298,86 @@ class PopupTests(BrowserTests):
     def test_opening_popup_sends_no_backend_request(self):
         self.assertEqual(self.requests, [])
         self.assertEqual(self.page.locator("#preview-box").inner_text(), "Initial answer.")
+        self.assertEqual(self.page.locator("#scope-select").input_value(), "chat")
+        self.assertEqual(self.page.evaluate("window.requestedScopes"), ["chat"])
+
+    def exported_report(self):
+        with self.page.expect_download() as download_info:
+            self.page.click("#export-btn")
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "inspection.json"
+            download_info.value.save_as(target)
+            return json.loads(target.read_text())
+
+    def test_complete_chat_submission_and_export_keep_scope_and_count(self):
+        self.page.evaluate("""window.testCaptures = {chat: {
+          success:true, text:'First answer.\\n\\nSecond answer.', scope:'chat', message_count:2
+        }}""")
+        self.page.click("#refresh-btn")
+        self.page.wait_for_function("document.getElementById('source-label').textContent.includes('2 ChatGPT answers')")
+        self.assertEqual(self.requests, [])
+        self.page.click("#quick-btn")
+        self.page.wait_for_function("!document.getElementById('export-btn').disabled")
+        self.assertEqual(self.requests[0][1]["text"], "First answer.\n\nSecond answer.")
+        report = self.exported_report()
+        self.assertEqual(report["analysis_scope"], "chat")
+        self.assertEqual(report["captured_message_count"], 2)
+
+    def test_switching_to_latest_clears_previous_inspection_without_submitting(self):
+        self.complete_full_fixture()
+        self.page.evaluate("window.testCaptures = {latest:{success:true,text:'Only latest answer.',message_count:1}}")
+        self.page.select_option("#scope-select", "latest")
+        self.page.wait_for_function("document.getElementById('preview-box').textContent === 'Only latest answer.'")
+        self.assertEqual(self.page.locator("#results-area").inner_text(), "")
+        self.assertTrue(self.page.locator("#export-btn").is_disabled())
+        self.assertTrue(self.page.locator("#compare-btn").is_disabled())
+        self.assertEqual(len(self.requests), 1)
+        self.page.click("#full-btn")
+        self.page.wait_for_function("!document.getElementById('export-btn').disabled")
+        self.assertEqual(self.requests[1][1]["text"], "Only latest answer.")
+        report = self.exported_report()
+        self.assertEqual(report["analysis_scope"], "latest")
+        self.assertEqual(report["captured_message_count"], 1)
+
+    def test_selection_failure_never_submits_whole_chat_and_refresh_recovers(self):
+        self.page.evaluate("window.testCaptures = {selection:{success:false,error:'Highlight a passage first.'}}")
+        self.page.select_option("#scope-select", "selection")
+        self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
+        self.assertEqual(self.requests, [])
+        self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        self.page.evaluate("window.testCaptures.selection = {success:true,text:'Selected passage.',message_count:1}")
+        self.page.click("#refresh-btn")
+        self.page.wait_for_function("!document.getElementById('quick-btn').disabled")
+        self.page.click("#quick-btn")
+        self.page.wait_for_function("!document.getElementById('export-btn').disabled")
+        self.assertEqual(self.requests[0][1]["text"], "Selected passage.")
+        self.assertEqual(self.page.evaluate("window.requestedScopes"), ["chat", "selection", "selection", "selection"])
+        self.assertEqual(self.exported_report()["analysis_scope"], "selection")
+
+    def test_selected_pasted_part_uses_exact_preview_without_page_capture(self):
+        self.page.locator("#paste-details summary").click()
+        self.page.fill("#paste-input", "Before. Only this passage. After.")
+        self.page.locator("#paste-input").evaluate("node => node.setSelectionRange(8, 26)")
+        self.page.click("#paste-selection-btn")
+        self.assertEqual(self.page.locator("#preview-box").text_content(), "Only this passage.")
+        self.assertEqual(self.page.locator("#scope-select").input_value(), "pasted")
+        injections = self.page.evaluate("window.injectionCount")
+        self.page.click("#quick-btn")
+        self.page.wait_for_function("!document.getElementById('export-btn').disabled")
+        self.assertEqual(self.page.evaluate("window.injectionCount"), injections)
+        self.assertEqual(self.requests[0][1]["text"], "Only this passage.")
+        report = self.exported_report()
+        self.assertEqual(report["analysis_scope"], "pasted-selection")
+        self.assertEqual(report["capture_source"], "pasted-answer")
+
+    def test_missing_paste_selection_preserves_current_preview(self):
+        self.page.locator("#paste-details summary").click()
+        self.page.fill("#paste-input", "Unselected draft.")
+        self.page.click("#paste-selection-btn")
+        self.assertIn("Highlight a passage", self.page.locator("#status-area").inner_text())
+        self.assertEqual(self.page.locator("#preview-box").text_content(), "Initial answer.")
+        self.assertEqual(self.page.locator("#scope-select").input_value(), "chat")
+        self.assertEqual(self.requests, [])
 
     def test_capture_failure_offers_paste_and_checks_only_explicitly_selected_text(self):
         self.page.evaluate("window.testCapture = {success:false,error:'No assistant answer detected.'}")
@@ -257,13 +406,15 @@ class PopupTests(BrowserTests):
             report = json.loads(target.read_text())
         self.assertEqual(report["capture_source"], "pasted-answer")
         self.assertEqual(report["captured_text"], answer)
+        self.assertEqual(report["analysis_scope"], "pasted-full")
+        self.assertIsNone(report["captured_message_count"])
 
     def test_refresh_switches_pasted_answer_back_to_page_capture(self):
         self.page.locator("#paste-details summary").click()
         self.page.fill("#paste-input", "Pasted answer.")
         self.page.click("#paste-btn")
         self.page.click("#refresh-btn")
-        self.page.wait_for_function("document.getElementById('source-label').textContent === 'Latest ChatGPT answer'")
+        self.page.wait_for_function("document.getElementById('source-label').textContent.startsWith('Complete chat')")
         self.assertEqual(self.page.locator("#preview-box").inner_text(), "Initial answer.")
         self.assertEqual(self.requests, [])
         self.page.evaluate("window.testCapture.text = 'Updated page answer.'")
@@ -521,7 +672,7 @@ class PopupTests(BrowserTests):
             download_info.value.save_as(target)
             report = json.loads(target.read_text())
         self.assertEqual(report["schema_version"], "nullius-inspection-export-v1")
-        self.assertEqual(report["extension_version"], "1.2.1")
+        self.assertEqual(report["extension_version"], "1.3.0")
         self.assertEqual(report["capture_source"], "chatgpt-page")
         self.assertEqual(report["captured_text"], "Initial answer.")
         self.assertEqual(report["original_result"], self.backend_data)
@@ -598,6 +749,8 @@ class PopupTests(BrowserTests):
         self.assertEqual(self.requests, [])
 
     def test_timeout_releases_buttons(self):
+        self.page.select_option("#scope-select", "latest")
+        self.page.wait_for_function("!document.getElementById('quick-btn').disabled")
         self.page.clock.install()
         self.page.evaluate("""() => { window.fetch = (url, options) => {
           window.testWaiting = true;
@@ -608,6 +761,24 @@ class PopupTests(BrowserTests):
         self.page.wait_for_function("window.testWaiting === true")
         self.page.clock.fast_forward(5001)
         self.assertIn("timed out", self.page.locator("#status-area").inner_text())
+        self.assertFalse(self.page.locator("#quick-btn").is_disabled())
+
+    def test_complete_chat_has_longer_deadline_and_locks_scope_until_timeout(self):
+        self.page.clock.install()
+        self.page.evaluate("""() => { window.fetch = (url, options) => {
+          window.testWaiting = true;
+          return new Promise((resolve, reject) => options.signal.addEventListener('abort',
+            () => reject(new DOMException('Aborted', 'AbortError'))));
+        }; }""")
+        self.page.click("#quick-btn")
+        self.page.wait_for_function("window.testWaiting === true")
+        self.assertTrue(self.page.locator("#scope-select").is_disabled())
+        self.assertTrue(self.page.locator("#paste-selection-btn").is_disabled())
+        self.page.clock.fast_forward(5001)
+        self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        self.page.clock.fast_forward(10000)
+        self.assertIn("Complete chat check timed out", self.page.locator("#status-area").inner_text())
+        self.assertFalse(self.page.locator("#scope-select").is_disabled())
         self.assertFalse(self.page.locator("#quick-btn").is_disabled())
 
 

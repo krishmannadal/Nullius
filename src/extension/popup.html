@@ -145,6 +145,8 @@
     .notice { font-size: 12px; color: #555; line-height: 1.5; }
     #paste-input { box-sizing: border-box; width: 100%; min-height: 100px; padding: 8px; font: inherit; }
     #paste-btn { margin-top: 8px; }
+    #scope-select { width: 100%; margin-top: 4px; padding: 8px; font: inherit; }
+    #scope-help { margin: 6px 0; }
     .pairwise-scores {
       font-size: 10px;
       display: flex;
@@ -173,20 +175,32 @@
   <p class="notice">Research harness · small debug corpus. Missing evidence is not a falsehood. ★ DECISIVE means the aggregation rule selected that evidence. No scientific validation is claimed.</p>
   
   <div class="section">
-    <div class="label">Response Preview</div>
+    <label for="scope-select" class="label">Analysis scope</label>
+    <select id="scope-select" aria-describedby="scope-help">
+      <option value="chat" selected>Complete chat (default)</option>
+      <option value="latest">Latest response · full text</option>
+      <option value="selection">Selected text only</option>
+      <option value="pasted" disabled hidden>Pasted text</option>
+    </select>
+    <p id="scope-help" class="notice">All loaded ChatGPT answers in this conversation. Scroll up to load earlier answers before capturing.</p>
+  </div>
+
+  <div class="section">
+    <div class="label">Analysis preview</div>
     <div id="preview-box">Loading...</div>
     <p id="source-label" class="notice" aria-live="polite"></p>
   </div>
 
   <details id="paste-details">
     <summary>Paste answer instead</summary>
-    <p class="notice">Copy the completed ChatGPT answer and paste it here if automatic capture fails. Click Use pasted answer to update the preview.</p>
+    <p class="notice">Paste a completed answer or the answers from your chat. Use its full text, or highlight a passage in this box and use only that part.</p>
     <label for="paste-input">Answer text</label>
     <textarea id="paste-input" placeholder="Paste the answer you want to inspect" spellcheck="false"></textarea>
-    <button id="paste-btn">Use pasted answer</button>
+    <button id="paste-btn">Use entire pasted text</button>
+    <button id="paste-selection-btn">Use selected pasted part</button>
   </details>
 
-  <button id="refresh-btn">Refresh response</button>
+  <button id="refresh-btn">Refresh preview</button>
   <button id="connection-btn">Test connection</button>
   <button id="quick-btn" disabled>Quick Check</button>
   <button id="full-btn" disabled>Full Inspection</button>

@@ -9,6 +9,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const scopeHelp = document.getElementById('scope-help');
   const quickBtn = document.getElementById('quick-btn');
   const fullBtn = document.getElementById('full-btn');
+  const diagnosticsBtn = document.getElementById('diagnostics-btn');
+  const previewDetails = document.getElementById('preview-details');
+  const extensionVersion = chrome.runtime?.getManifest?.()?.version || 'unknown';
+  document.getElementById('version-label').textContent = `v${extensionVersion}`;
+  let lastDiagnostics = null;
   const refreshBtn = document.getElementById('refresh-btn');
   const connectionBtn = document.getElementById('connection-btn');
   const compareBtn = document.getElementById('compare-btn');
@@ -45,7 +50,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   function setBusy(value) {
     busy = value;
     quickBtn.disabled = value || !capturedText;
-    fullBtn.disabled = value || !capturedText;
+    // The primary action can retry capture if the page finished loading after popup opening.
+    fullBtn.disabled = value;
+    diagnosticsBtn.disabled = value;
     refreshBtn.disabled = value;
     connectionBtn.disabled = value;
     pasteBtn.disabled = value;
@@ -78,7 +85,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function capturePage() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !tab.url || !['chatgpt.com', 'chat.openai.com'].includes(new URL(tab.url).hostname)) {
-      throw new Error('Open a conversation on chatgpt.com, then click Refresh preview.');
+      throw new Error('Open a conversation on chatgpt.com, then click Analyze response.');
     }
     const scope = scopeSelect.value;
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
@@ -88,6 +95,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       args: [scope]
     });
     const response = frames.find(frame => frame.frameId === 0)?.result;
+    lastDiagnostics = response?.diagnostics || null;
     if (!response?.success || typeof response.text !== 'string' || !response.text.trim()) {
       throw new Error(response?.error || 'Could not capture the latest ChatGPT answer. Refresh the page and try again.');
     }
@@ -118,7 +126,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (error) {
       capturedText = null;
       previewBox.textContent = error.message;
-      pasteDetails.open = true;
+      previewDetails.open = true;
       showStatus(error.message, true);
     } finally {
       setBusy(false);
@@ -129,15 +137,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (busy) return;
     setBusy(true);
     clearInspection();
-    showStatus(kind === 'quick' ? 'Checking evidence availability…' : 'Inspecting claims and evidence…');
+    showStatus(kind === 'quick' ? 'Searching the reference corpus…' : 'Reading ChatGPT and analyzing its claims… Keep this popup open.');
     const button = kind === 'quick' ? quickBtn : fullBtn;
-    button.textContent = kind === 'quick' ? 'Checking…' : 'Inspecting…';
+    button.textContent = kind === 'quick' ? 'Searching…' : 'Analyzing response…';
     let timeoutId;
     let stage = 'capture';
     try {
       // Page checks recapture; an explicitly chosen pasted answer keeps its previewed snapshot.
       const text = captureSource === 'pasted-answer' ? capturedText : await capturePage();
       stage = 'backend';
+      if (kind === 'full') showStatus('Analyzing claims against the reference corpus… The first analysis may take longer while the model loads.');
       const controller = new AbortController();
       const timeout = captureScope === 'chat' ?
         (kind === 'quick' ? timeouts.chatQuick : timeouts.chatFull) : timeouts[kind];
@@ -165,8 +174,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (kind === 'quick') renderQuickResults(data);
       else renderFullResults(data);
       showStatus(kind === 'quick' ?
-        'Quick Check reports evidence availability. A missing hit does not mean a claim is false.' :
-        'Inspection complete for the response shown above. Scores are uncalibrated research outputs.');
+        'Evidence search complete. Click Analyze response to check the claims against the retrieved evidence.' :
+        `Analysis complete · ${data.claims.length} claims extracted. Review each verdict and its evidence below.`);
     } catch (error) {
       clearInspection();
       if (stage === 'capture') {
@@ -176,11 +185,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         capturedMessageCount = null;
         sourceLabel.textContent = '';
         previewBox.textContent = error.message;
-        pasteDetails.open = true;
+        previewDetails.open = true;
         showStatus(error.message, true);
       } else if (error.name === 'AbortError') {
         showStatus(captureScope === 'chat' ?
-          'Complete chat check timed out. Try Latest response or Selected text, and warm the backend for Full Inspection. Closing this request does not stop backend computation.' :
+          'Complete chat check timed out. Try Latest response or Selected text, and start the backend with --warm-full. Closing this request does not stop backend computation.' :
           'Request timed out. First-time model loading can take longer; warm the backend and try again. Closing this request does not stop backend computation.', true);
       } else if (error instanceof TypeError) {
         showStatus('Cannot connect to Nullius. Start the local backend on this computer at 127.0.0.1:8000, then use Test connection.', true);
@@ -189,7 +198,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } finally {
       clearTimeout(timeoutId);
-      button.textContent = kind === 'quick' ? 'Quick Check' : 'Full Inspection';
+      button.textContent = kind === 'quick' ? 'Search evidence only' : 'Analyze response';
       setBusy(false);
     }
   }
@@ -199,7 +208,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         data.config_hash !== inspection.data.config_hash ||
         (data.git_sha ?? null) !== (inspection.data.git_sha ?? null) ||
         !data.comparisons || typeof data.comparisons !== 'object') {
-      throw new Error('Rule comparison does not match this inspection. Run Full Inspection again.');
+      throw new Error('Rule comparison does not match this inspection. Click Analyze response again.');
     }
     const ids = inspection.data.claims.map(claim => claim.id);
     if (Object.keys(data.comparisons).length !== ids.length) {
@@ -292,7 +301,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       if (response.status === 404) {
         comparisonExpired = true;
-        throw new Error('This inspection expired or the backend restarted. Export your results, then run Full Inspection again.');
+        throw new Error('This inspection expired or the backend restarted. Export your results, then click Analyze response again.');
       }
       if (!response.ok) throw new Error(`Rule comparison failed (${response.status}). Your original inspection is preserved.`);
       const data = await response.json();
@@ -352,11 +361,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     describeScope();
     previewBox.textContent = capturedText;
     sourceLabel.textContent = selectedOnly ? 'Pasted answer · selected part only' : 'Pasted answer · entire text';
-    showStatus('Preview ready. Choose Quick Check or Full Inspection to inspect this text. Refresh preview returns to Complete chat.');
+    showStatus('Preview ready. Click Analyze response to inspect this text. Read ChatGPT again returns to Complete chat.');
     setBusy(false);
   }
   pasteBtn.addEventListener('click', () => usePaste(false));
   pasteSelectionBtn.addEventListener('click', () => usePaste(true));
+  diagnosticsBtn.addEventListener('click', async () => {
+    const report = JSON.stringify({ extension_version: extensionVersion, scope: scopeSelect.value,
+      capture: lastDiagnostics, error: capturedText ? null : previewBox.textContent }, null, 2);
+    try {
+      await navigator.clipboard.writeText(report);
+      showStatus('Capture diagnostics copied. They contain page structure counts, not your conversation text.');
+    } catch {
+      showStatus(`Copy these capture diagnostics: ${report}`);
+    }
+  });
   scopeSelect.addEventListener('change', refresh);
   refreshBtn.addEventListener('click', refresh);
   quickBtn.addEventListener('click', () => inspect('quick'));
@@ -372,7 +391,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!response.ok || !schema.paths?.['/verify/quick'] || !schema.paths?.['/verify/full']) {
         throw new Error('The local server does not provide the Nullius verification endpoints.');
       }
-      showStatus('Connected to Nullius verification API. Use Quick Check to test evidence availability; Full Inspection also needs downloaded NLI model files.');
+      showStatus('Connected to Nullius verification API. Click Analyze response to run the verifier.');
     } catch (error) {
       showStatus(`Backend unavailable. Run python -m scripts.run_extension_backend on this computer. ${error.message}`, true);
     } finally {
@@ -487,7 +506,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Render claims list
     const claimsLabel = document.createElement('div');
     claimsLabel.className = 'label';
-    claimsLabel.textContent = 'Inspection Details:';
+    claimsLabel.textContent = 'Claims in this response';
     resultsArea.appendChild(claimsLabel);
 
     if (!data.claims || data.claims.length === 0) {
@@ -528,17 +547,38 @@ document.addEventListener('DOMContentLoaded', async () => {
       claimText.textContent = `"${claim.text}"`;
       card.appendChild(claimText);
 
+      const explanation = document.createElement('p');
+      explanation.className = 'verdict-explanation';
+      explanation.textContent = {
+        Supported: 'The retrieved evidence supports this claim.',
+        Contradicted: 'The retrieved evidence conflicts with this claim.',
+        Insufficient: 'The available evidence is inconclusive. This claim has not been verified.',
+        Abstain: 'The model could not verify this claim from the available evidence. This does not mean the claim is false.'
+      }[verdict.label] || 'Review the evidence below.';
+      card.appendChild(explanation);
+
+      const evidenceDetails = document.createElement('details');
+      evidenceDetails.className = 'evidence-details';
+      const evidenceSummary = document.createElement('summary');
+      evidenceSummary.textContent = 'View evidence and model scores';
+      evidenceDetails.appendChild(evidenceSummary);
+
       // Aggregation info
       if (verdict.aggregation_trace) {
-        const aggInfo = document.createElement('div');
+        const aggInfo = document.createElement('details');
         aggInfo.className = 'agg-info';
+        const aggSummary = document.createElement('summary');
+        aggSummary.textContent = 'Decision rule and research trace';
+        aggInfo.appendChild(aggSummary);
         const rule = verdict.aggregation_trace.rule || "Aggregated";
         const conf = Math.round(verdict.confidence * 100);
-        aggInfo.textContent = `Rule: ${rule} (Uncalibrated confidence: ${conf}%)`;
+        const ruleText = document.createElement('p');
+        ruleText.textContent = `Rule: ${rule} (Uncalibrated confidence: ${conf}%)`;
+        aggInfo.appendChild(ruleText);
         const trace = document.createElement('pre');
         trace.textContent = JSON.stringify(verdict.aggregation_trace, null, 2);
         aggInfo.appendChild(trace);
-        card.appendChild(aggInfo);
+        evidenceDetails.appendChild(aggInfo);
       }
 
       // Evidence list
@@ -618,8 +658,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           evItem.appendChild(scores);
           evList.appendChild(evItem);
         });
-        card.appendChild(evList);
+        evidenceDetails.appendChild(evList);
       }
+
+      card.appendChild(evidenceDetails);
 
       resultsArea.appendChild(card);
     });

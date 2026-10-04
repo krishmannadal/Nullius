@@ -147,6 +147,23 @@
     #paste-btn { margin-top: 8px; }
     #scope-select { width: 100%; margin-top: 4px; padding: 8px; font: inherit; }
     #scope-help { margin: 6px 0; }
+    body { background: #f6f8fc; color: #18233b; }
+    h2 { border: 0; margin-bottom: 4px; font-size: 23px; letter-spacing: -0.6px; }
+    .brand { display: flex; align-items: center; justify-content: space-between; }
+    #version-label { font-size: 11px; color: #62718a; }
+    .tagline { margin: 0 0 18px; color: #62718a; font-size: 13px; }
+    #full-btn { padding: 14px; font-size: 16px; background: #2156d9; box-shadow: 0 3px 10px #2156d922; }
+    #full-btn:disabled { background: #94a7cf; }
+    #refresh-btn { margin-top: 8px; background: #e6ecf8; color: #23477d; }
+    #source-label { margin: 8px 0; }
+    #preview-details, #advanced-details, #paste-details { padding: 10px; background: white; border: 1px solid #e0e6f0; border-radius: 8px; }
+    details > summary { font-size: 13px; font-weight: 600; }
+    #preview-box { margin-top: 10px; border: 0; }
+    #advanced-details button { margin-top: 8px; background: #e6ecf8; color: #23477d; }
+    .claim-card { border-radius: 10px; padding: 12px; background: white; border-color: #e0e6f0; }
+    .claim-text { font-style: normal; font-size: 14px; line-height: 1.5; }
+    .verdict-explanation { font-size: 12px; line-height: 1.5; color: #52617a; }
+    .research-note { font-size: 11px; color: #65738a; line-height: 1.5; }
     .pairwise-scores {
       font-size: 10px;
       display: flex;
@@ -171,8 +188,8 @@
   </style>
 </head>
 <body>
-  <h2>Nullius · ChatGPT inspection</h2>
-  <p class="notice">Research harness · small debug corpus. Missing evidence is not a falsehood. ★ DECISIVE means the aggregation rule selected that evidence. No scientific validation is claimed.</p>
+  <div class="brand"><h2>Nullius</h2><span id="version-label"></span></div>
+  <p class="tagline">Explore the evidence behind ChatGPT's answers.</p>
   
   <div class="section">
     <label for="scope-select" class="label">Analysis scope</label>
@@ -185,11 +202,28 @@
     <p id="scope-help" class="notice">All loaded ChatGPT answers in this conversation. Scroll up to load earlier answers before capturing.</p>
   </div>
 
-  <div class="section">
-    <div class="label">Analysis preview</div>
+  <button id="full-btn">Analyze response</button>
+  <button id="refresh-btn">Read ChatGPT again</button>
+  <p id="source-label" class="notice" aria-live="polite">Reading your ChatGPT conversation…</p>
+  <div id="status-area" role="status" aria-live="polite"></div>
+
+  <details id="preview-details">
+    <summary>Text to analyze</summary>
     <div id="preview-box">Loading...</div>
-    <p id="source-label" class="notice" aria-live="polite"></p>
-  </div>
+  </details>
+
+  <div id="results-area"></div>
+  <div id="comparison-area"></div>
+
+  <details id="advanced-details">
+    <summary>Connection, evidence search &amp; research tools</summary>
+    <button id="connection-btn">Test connection</button>
+    <button id="quick-btn" disabled>Search evidence only</button>
+    <button id="compare-btn" disabled>Compare rules · no new inference</button>
+    <button id="export-btn" disabled>Export analysis JSON</button>
+    <button id="diagnostics-btn">Copy capture diagnostics</button>
+    <p class="research-note">Analyze response runs claim extraction, evidence retrieval and the NLI verifier. Evidence search only skips the verifier. Scores are uncalibrated research outputs; ★ DECISIVE identifies evidence selected by the aggregation rule.</p>
+  </details>
 
   <details id="paste-details">
     <summary>Paste answer instead</summary>
@@ -200,19 +234,8 @@
     <button id="paste-selection-btn">Use selected pasted part</button>
   </details>
 
-  <button id="refresh-btn">Refresh preview</button>
-  <button id="connection-btn">Test connection</button>
-  <button id="quick-btn" disabled>Quick Check</button>
-  <button id="full-btn" disabled>Full Inspection</button>
-
-  <button id="compare-btn" disabled>Compare rules · no new inference</button>
-  <button id="export-btn" disabled>Export inspection JSON</button>
-
-  <div id="status-area" role="status" aria-live="polite"></div>
-  <div id="results-area"></div>
-  <div id="comparison-area"></div>
-
-  <p class="notice">Only an explicit check sends the previewed answer to your local Nullius backend. Keep this popup open until the request finishes.</p>
+  <p class="research-note">Research prototype · limited reference corpus. Missing evidence is not proof of a false statement. No scientific validation is claimed.</p>
+  <p class="notice">Analyze response sends the captured text to your local Nullius backend. Keep this popup open until it finishes.</p>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -19,14 +19,20 @@
         return true;
       }
 
-      const assistantSelector = '[data-message-author-role="assistant"], [data-turn="assistant"], [data-testid="assistant-message"]';
-      const userSelector = '[data-message-author-role="user"], [data-turn="user"]';
+      const assistantSelector = '[data-message-author-role="assistant"], [data-turn="assistant"], [data-testid="assistant-message"], .agent-turn, [data-message-role="assistant"]';
+      const userSelector = '[data-message-author-role="user"], [data-turn="user"], [data-testid="user-message"], .user-message-bubble, [data-message-role="user"]';
       const candidates = new Set(document.querySelectorAll(assistantSelector));
-      // Some conversation layouts put the role on the turn heading instead of the body.
-      for (const turn of document.querySelectorAll('[data-testid^="conversation-turn-"]')) {
+      // ChatGPT layouts also identify turns by their article/message container.
+      // Require an answer body, and reject user bubbles/headings; never read the whole page.
+      for (const turn of document.querySelectorAll('[data-testid^="conversation-turn-"], main article, main [data-message-id]')) {
         if (turn.matches(userSelector) || turn.querySelector(userSelector)) continue;
+        const enclosingTurn = turn.closest('[data-testid^="conversation-turn-"], article');
+        const enclosingHeading = enclosingTurn?.querySelector('h5, h6');
+        if (enclosingHeading && /^You said\s*:?\s*$/i.test(enclosingHeading.textContent.trim())) continue;
         const heading = turn.querySelector('h5, h6');
-        if (heading && /^ChatGPT said\s*:?\s*$/i.test(heading.textContent.trim())) candidates.add(turn);
+        if (heading && /^You said\s*:?\s*$/i.test(heading.textContent.trim())) continue;
+        if ((heading && /^ChatGPT said\s*:?\s*$/i.test(heading.textContent.trim())) ||
+            turn.querySelector('.markdown, [data-testid="assistant-message"]')) candidates.add(turn);
       }
       const nodes = [...candidates].filter(node => isVisible(node) && !node.closest(userSelector));
       // Keep a whole assistant turn when role markers are nested; preserve DOM ordering.
@@ -34,7 +40,16 @@
         .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1);
       const lastNode = turns.at(-1);
       if (!lastNode) {
-        return { success: false, error: 'No assistant answer detected. Open a completed ChatGPT conversation and refresh, or use Paste answer instead below.' };
+        return { success: false,
+          error: 'No ChatGPT answer is visible to Nullius yet. Keep the conversation tab active, wait for an answer, then click Analyze response again. Capture diagnostics are available below.',
+          diagnostics: { hostname: location.hostname, ready_state: document.readyState,
+            assistant_markers: document.querySelectorAll(assistantSelector).length,
+            conversation_turns: document.querySelectorAll('[data-testid^="conversation-turn-"]').length,
+            articles: document.querySelectorAll('main article').length,
+            markdown_bodies: document.querySelectorAll('.markdown').length,
+            message_containers: document.querySelectorAll('[data-message-id]').length,
+            user_markers: document.querySelectorAll(userSelector).length,
+            frames: document.querySelectorAll('iframe').length } };
       }
       const stopButtons = document.querySelectorAll(
         'button[data-testid="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop streaming"]'

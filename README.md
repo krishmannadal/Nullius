@@ -160,8 +160,8 @@ The Manifest V3 extension lives in `src/extension`. Its default Complete chat mo
 captures all loaded ChatGPT answers in the current conversation. Choose Latest
 response to inspect one full answer, or Selected text to inspect a highlighted
 passage. Pasted text also supports full-text and selected-part inspection.
-The popup offers Quick Check and Full Inspection for each scope.
-After Full Inspection, compare five aggregation rules on the same stored scores
+Click the prominent **Analyze response** button to capture and analyze the chosen scope automatically. Evidence-only search and research tools are available in an expandable section.
+After analysis, compare five aggregation rules on the same stored scores
 without running the model again, then export the complete inspection JSON.
 Start its local backend with `python -m scripts.run_extension_backend --warm-full`,
 then load `src/extension` through Chrome's **Load unpacked** action.

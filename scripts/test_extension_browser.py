@@ -67,6 +67,25 @@ class ChatGPTCaptureTests(BrowserTests):
         result = self.page.evaluate("() => window.__nulliusCapture()")
         self.assertEqual(result, {"success": True, "text": "Old answer.\n\nLatest answer.", "scope": "chat", "message_count": 2})
 
+    def test_conversation_articles_without_role_attributes_are_captured(self):
+        self.page.set_content('''<main>
+          <article data-testid="conversation-turn-1"><div class="user-message-bubble">User prompt.</div></article>
+          <article data-testid="conversation-turn-2"><div class="markdown">First answer.</div><button>Copy</button></article>
+          <article data-testid="conversation-turn-3"><div class="markdown">Second answer.</div></article></main>''')
+        result = self.capture("chat")
+        self.assertEqual(result["text"], "First answer.\n\nSecond answer.")
+        self.assertEqual(result["message_count"], 2)
+
+    def test_nested_message_id_in_user_heading_turn_is_excluded(self):
+        self.page.set_content('''<main><article><h5>You said:</h5>
+          <div data-message-id="user"><div class="markdown">User prompt.</div></div></article>
+          <article><div data-message-id="assistant"><div class="markdown">Answer.</div></div></article></main>''')
+        self.assertEqual(self.capture("chat")["text"], "Answer.")
+
+    def test_agent_turn_layout_without_legacy_role_marker(self):
+        self.page.set_content('<main><section class="agent-turn"><div class="markdown">Agent answer.</div></section></main>')
+        self.assertEqual(self.capture("chat")["text"], "Agent answer.")
+
     def test_complete_chat_deduplicates_nested_roles_but_keeps_repeated_answers(self):
         self.page.set_content('''<article data-turn="assistant"><div data-message-author-role="assistant">
           <div class="markdown">Same answer.</div></div></article>
@@ -157,7 +176,8 @@ class ChatGPTCaptureTests(BrowserTests):
         self.page.set_content('<main><div class="markdown">Unidentified text.</div></main>')
         result = self.capture()
         self.assertFalse(result["success"])
-        self.assertIn("Paste answer instead", result["error"])
+        self.assertIn("Analyze response again", result["error"])
+        self.assertEqual(result["diagnostics"]["markdown_bodies"], 1)
 
     def test_hidden_answers_and_hidden_body_blocks_are_excluded(self):
         self.page.locator("section").evaluate('''node => {
@@ -229,7 +249,7 @@ class PopupTests(BrowserTests):
               window.requestedScopes.push(options.args[0]);
               return [{frameId:0,result:window.testCaptures?.[options.args[0]] || window.testCapture}];
             }},
-            runtime: {getManifest: () => ({version:'1.3.0'})}
+            runtime: {getManifest: () => ({version:'1.4.0'})}
           };
         """)
         self.page.route(
@@ -247,6 +267,9 @@ class PopupTests(BrowserTests):
         self.page.route("http://127.0.0.1:8000/**", self.backend)
         self.page.goto("http://127.0.0.1:8501/popup.html")
         self.page.wait_for_function("!document.getElementById('quick-btn').disabled")
+        # Research actions are intentionally secondary; open their section for those tests.
+        self.page.locator("#advanced-details").evaluate("node => node.open = true")
+        self.page.locator("#preview-details").evaluate("node => node.open = true")
 
     def backend(self, route):
         cors = {
@@ -300,6 +323,27 @@ class PopupTests(BrowserTests):
         self.assertEqual(self.page.locator("#preview-box").inner_text(), "Initial answer.")
         self.assertEqual(self.page.locator("#scope-select").input_value(), "chat")
         self.assertEqual(self.page.evaluate("window.requestedScopes"), ["chat"])
+
+    def test_primary_analyze_button_is_visible_without_paste_or_research_tools(self):
+        self.page.reload()
+        self.page.wait_for_function("!document.getElementById('full-btn').disabled")
+        self.assertEqual(self.page.locator("#full-btn").inner_text(), "Analyze response")
+        self.assertLess(self.page.locator("#full-btn").bounding_box()["y"], 300)
+        self.assertFalse(self.page.locator("#paste-details").evaluate("node => node.open"))
+        self.assertFalse(self.page.locator("#advanced-details").evaluate("node => node.open"))
+        self.assertEqual(self.page.locator("#version-label").inner_text(), "v1.4.0")
+        self.assertEqual(self.requests, [])
+
+    def test_primary_button_recovers_capture_after_answer_appears(self):
+        self.page.evaluate("window.testCapture = {success:false,error:'No answer yet.'}")
+        self.page.click("#refresh-btn")
+        self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
+        self.assertFalse(self.page.locator("#full-btn").is_disabled())
+        self.assertEqual(self.requests, [])
+        self.page.evaluate("window.testCapture = {success:true,text:'Answer appeared.'}")
+        self.complete_full_fixture()
+        self.assertEqual(self.requests[0][1]["text"], "Answer appeared.")
+        self.assertEqual(self.page.locator("#full-btn").inner_text(), "Analyze response")
 
     def exported_report(self):
         with self.page.expect_download() as download_info:
@@ -383,8 +427,10 @@ class PopupTests(BrowserTests):
         self.page.evaluate("window.testCapture = {success:false,error:'No assistant answer detected.'}")
         self.page.click("#refresh-btn")
         self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
-        self.assertTrue(self.page.locator("#paste-details").evaluate("node => node.open"))
+        self.assertFalse(self.page.locator("#paste-details").evaluate("node => node.open"))
+        self.assertTrue(self.page.locator("#preview-details").evaluate("node => node.open"))
         self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        self.page.locator("#paste-details summary").click()
         answer = "  Pasted completed answer.\nSecond paragraph.  "
         self.page.fill("#paste-input", answer)
         self.page.click("#paste-btn")
@@ -454,14 +500,14 @@ class PopupTests(BrowserTests):
         self.page.click("#refresh-btn")
         self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
         self.assertTrue(self.page.locator("#quick-btn").is_disabled())
-        self.assertTrue(self.page.locator("#full-btn").is_disabled())
+        self.assertFalse(self.page.locator("#full-btn").is_disabled())
         self.assertEqual(self.requests, [])
 
     def test_quick_recaptures_fresh_response_and_skips_total_badge(self):
         self.page.evaluate("window.testCapture.text = 'New answer.'")
         self.page.click("#quick-btn")
         self.page.wait_for_function(
-            "document.getElementById('status-area').textContent.includes('Quick Check reports')"
+            "document.getElementById('status-area').textContent.includes('Evidence search complete')"
         )
         self.assertEqual(len(self.requests), 1)
         endpoint, body = self.requests[0]
@@ -518,8 +564,12 @@ class PopupTests(BrowserTests):
         }
         self.page.click("#full-btn")
         self.page.wait_for_function(
-            "document.getElementById('status-area').textContent.includes('Inspection complete')"
+            "document.getElementById('status-area').textContent.includes('Analysis complete')"
         )
+        self.assertIn("could not verify", self.page.locator("#results-area").inner_text())
+        self.assertFalse(self.page.locator(".evidence-details").evaluate("node => node.open"))
+        self.page.locator(".evidence-details > summary").click()
+        self.page.locator(".agg-info > summary").click()
         text = self.page.locator("#results-area").inner_text()
         self.assertIn("Neutral: 100%", text)
         self.assertIn("Entail: 0%", text)
@@ -672,7 +722,7 @@ class PopupTests(BrowserTests):
             download_info.value.save_as(target)
             report = json.loads(target.read_text())
         self.assertEqual(report["schema_version"], "nullius-inspection-export-v1")
-        self.assertEqual(report["extension_version"], "1.3.0")
+        self.assertEqual(report["extension_version"], "1.4.0")
         self.assertEqual(report["capture_source"], "chatgpt-page")
         self.assertEqual(report["captured_text"], "Initial answer.")
         self.assertEqual(report["original_result"], self.backend_data)

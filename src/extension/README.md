@@ -3,8 +3,8 @@
 A Chrome Manifest V3 extension for inspecting ChatGPT answers on `chatgpt.com`
 (also recognizes `chat.openai.com`). It shows results in its popup and defaults
 to **Complete chat**, collecting all loaded assistant answers in the current conversation.
-The extension captures text only after you open it. Only clicking **Quick Check**
-or **Full Inspection** sends that text to the local backend. **Compare rules**
+The extension captures text only after you open it. Only clicking **Search evidence only**
+or **Analyze response** sends that text to the local backend. **Compare rules**
 sends only the stored run ID and rule settings; exports stay on your computer. It does not edit the
 ChatGPT page or run in the background.
 
@@ -36,13 +36,13 @@ and loads the real NLI model before accepting requests; public Hugging Face mode
 access is required. Stop any previous server on port 8000 first. Leave this
 terminal running. CPU inference is supported; CUDA is optional.
 
-To start Quick Check without transformer-model downloads, omit `--warm-full`:
+To start Search evidence only without transformer-model downloads, omit `--warm-full`:
 
 ```bash
 python -m scripts.run_extension_backend
 ```
 
-This warms spaCy and BM25. Full Inspection will still need the NLI model and can
+This warms spaCy and BM25. Analyze response will still need the NLI model and can
 time out on its first request; restart with `--warm-full` to prepare it beforehand.
 A failed warmup prints an error and must be resolved before claiming full readiness.
 The Chrome browser connects to the server on **the same computer**, so starting
@@ -56,15 +56,21 @@ only a cloud backend does not connect your local Chrome to it.
    (the folder directly containing `manifest.json`).
 4. Pin Nullius using Chrome's extensions menu.
 5. Open a ChatGPT conversation and wait for the answer to finish.
-6. Click Nullius, choose an analysis scope, check **Analysis preview**, and choose **Test connection**.
-7. Click **Quick Check** or **Full Inspection**, keeping the popup open until done.
+6. Click Nullius and confirm **v1.4.0** appears at the top. Complete chat is selected by default.
+7. Click the blue **Analyze response** button. The answer is read automatically; pasting is optional.
+8. Read the claim verdicts, then expand **View evidence and model scores** for supporting details. Keep the popup open until analysis finishes.
+
+Connection checks, evidence-only search, rule comparisons and JSON export are under
+**Connection, evidence search & research tools**. If the version is older, reload
+the extension from the updated `src/extension` folder; an extracted ZIP in another
+folder will not update when you pull the repository.
 
 If you use the release ZIP, extract it first and load the extracted folder that
 contains `manifest.json`. A ZIP alone cannot be loaded using **Load unpacked**.
 This is a developer installation, not a Chrome Web Store release.
 
 After pulling an update, click the extension's **Reload** button in
-`chrome://extensions`, then reload your ChatGPT tab. **Refresh preview** updates
+`chrome://extensions`, then reload your ChatGPT tab. **Read ChatGPT again** updates
 the snapshot in an already-open popup. Each check of a page-captured answer captures
 the chosen scope again, so it does not silently send an older snapshot after the
 conversation changes. The adapter is reinstalled on each capture and returns a
@@ -87,7 +93,7 @@ Changing scopes refreshes the preview and clears previous results and exports.
 It sends no text to the backend until you click a check. Full-chat and latest
 checks wait for generation to finish; a selection in an earlier completed answer
 can be inspected while a later answer is generating. Complete chat allows up to
-15 seconds for Quick Check and three minutes for Full Inspection; other scopes
+15 seconds for Search evidence only and three minutes for Analyze response; other scopes
 allow five seconds and one minute respectively. Keep the popup open until done.
 Long chats may still time out; use a smaller scope or prepare the NLI model first.
 
@@ -95,21 +101,21 @@ Long chats may still time out; use a smaller scope or prepare the NLI model firs
 
 Open **Paste answer instead**, copy the completed answer from ChatGPT, paste it,
 and click **Use entire pasted text**. Alternatively, highlight a passage in the
-paste box and click **Use selected pasted part**. Check **Analysis preview**, then click **Quick
-Check** or **Full Inspection**. Pasting and selecting text make no backend request.
+paste box and click **Use selected pasted part**. Check **Text to analyze**, then click
+**Analyze response**. Pasting and selecting text make no backend request.
 Checks use that selected snapshot; editing the paste box does not change the
 preview until you use one of those buttons again. The preview identifies pasted
 text and exports record `capture_source: "pasted-answer"` rather than
 `"chatgpt-page"`, plus `analysis_scope: "pasted-full"` or `"pasted-selection"`.
 The scope control displays **Pasted text** while this snapshot is active. Choose
-another scope to return to ChatGPT; **Refresh preview** returns to Complete chat.
+another scope to return to ChatGPT; **Read ChatGPT again** returns to Complete chat.
 The paste box and selected snapshot disappear when the popup closes.
 
 ## What the results mean
 
-- **Quick Check** reports whether BM25 found candidate sentences in the configured
+- **Search evidence only** reports whether BM25 found candidate sentences in the configured
   corpus. It does not run the verifier and does not declare claims true or false.
-- **Full Inspection** shows the backend's pairwise entailment, contradiction,
+- **Analyze response** shows the backend's pairwise entailment, contradiction,
   neutral and similarity scores, verdicts, aggregation trace and evidence IDs.
 - **DECISIVE** means the backend aggregation rule marked that evidence decisive.
 - Scores and confidence values are uncalibrated research outputs.
@@ -122,7 +128,7 @@ No scientific accuracy is claimed.
 
 ## Compare rules without rerunning the model
 
-After Full Inspection succeeds, click **Compare rules · no new inference**.
+After Analyze response succeeds, click **Compare rules · no new inference**.
 Nullius compares five backend rules on the exact pairwise scores already stored
 for this inspection: max entailment, noisy OR, rank weighting, threshold with
 abstention, and the majority baseline. The original verdict and all evidence
@@ -137,17 +143,17 @@ ID, config hash, Git commit or pairwise inputs differ from the original.
 
 The backend keeps at most 50 runs for up to one hour. Restarting the backend,
 expiry or eviction can make a run unavailable. Export the inspection while it is
-visible, then run Full Inspection again to create a new comparison-capable run.
-Quick Check has no verifier scores, so its rule-comparison button stays disabled.
+visible, then run Analyze response again to create a new comparison-capable run.
+Search evidence only has no verifier scores, so its rule-comparison button stays disabled.
 
 ## Export an inspection for research review
 
-Click **Export inspection JSON** after either kind of check. The download keeps:
+Click **Export analysis JSON** after either kind of check. The download keeps:
 
 - The exact captured answer, whether it came from the page or was pasted, and the
   original, unmodified backend result.
 - Original run ID, configuration hash, Git commit, timestamp, resolved configuration,
-  evidence and pairwise scores when returned by Full Inspection.
+  evidence and pairwise scores when returned by Analyze response.
 - Validated rule comparisons and their requested settings, when available.
 - Export timestamp, extension version and a research-use notice.
 - Analysis scope (`chat`, `latest`, `selection`, `pasted-full`, `pasted-selection`)
@@ -155,19 +161,21 @@ Click **Export inspection JSON** after either kind of check. The download keeps:
 
 An export is an inspection snapshot, not human annotation, adjudicated gold or
 evaluation metrics. It includes the captured answer, so review its content before
-sharing. Nothing is uploaded by the export action. **Refresh preview**, a scope change or a new
+sharing. Nothing is uploaded by the export action. **Read ChatGPT again**, a scope change or a new
 check clears the previous inspection and comparison to prevent stale exports.
 Closing the popup loses local state; download your inspection before closing.
 
 ## Troubleshooting and manual smoke test
 
 - **No answer found:** open a conversation containing an assistant answer, reload
-  ChatGPT after extension updates, and click Refresh preview. ChatGPT's DOM can
+  ChatGPT after extension updates, and click Read ChatGPT again. ChatGPT's DOM can
   change; the adapter recognizes explicit assistant message/turn markers and the
   English "ChatGPT said:" conversation heading, including `display:contents`
-  wrappers. It does not guess that arbitrary markdown is an assistant answer.
-  If automatic capture still fails, use **Paste answer instead**.
-- **Still generating:** wait for ChatGPT to finish, then Refresh preview.
+  wrappers, agent turns, and conversation articles containing answer bodies.
+  User bubbles and user headings are excluded. If automatic capture still fails,
+  use **Copy capture diagnostics** under research tools. The report contains
+  structure counts rather than conversation text. Paste remains an optional fallback.
+- **Still generating:** wait for ChatGPT to finish, then Read ChatGPT again.
 - **Cannot connect:** start the backend locally; check its terminal for dependency,
   model-download or port-in-use errors. Test connection checks API availability,
   not successful model inference.
@@ -184,7 +192,7 @@ checks instead of falling back to the entire chat. Try both checks; compare
 the full evidence IDs and scores with the backend. Then compare rules and export
 the JSON, checking that the run IDs and pairwise scores remain identical. Also
 select a pasted answer and a highlighted part in the paste box, confirm their
-previews and exported scopes, and click Refresh preview to return to Complete chat.
+previews and exported scopes, and click Read ChatGPT again to return to Complete chat.
 Stop the backend and confirm
 Test connection displays an error. Never use these smoke checks as scientific
 benchmark results.
@@ -211,3 +219,5 @@ popup interactions, recapture, streaming guards, timeouts, safe text rendering a
 error recovery. It does not log in to ChatGPT or validate Chrome's actual activeTab
 permission grant. The onboarding machine's Chromium administrator policy prevents
 loading unpacked extensions; the final real-profile smoke test is manual.
+
+For a short live demonstration, see [the presentation walkthrough](../../docs/PRESENTATION.md).

@@ -14,7 +14,7 @@ server startup message. Model loading happens before the presentation when
 `--warm-full` is used; the first download needs internet access.
 
 In Chrome, open `chrome://extensions` and reload Nullius. Reload the ChatGPT tab.
-Open the popup and confirm **v1.4.0** is displayed at the top. If you loaded an
+Open the popup and confirm **v1.4.1** is displayed at the top. If you loaded an
 extracted ZIP, replace that folder with the new ZIP contents and reload it;
 updating a separate Git checkout does not update the folder Chrome loaded.
 
@@ -58,7 +58,7 @@ includes loaded assistant answers, excluding user prompts and unloaded history.
 
 - **No answer detected:** confirm a completed answer is visible on the active
   ChatGPT tab. Click **Read ChatGPT again**, then **Analyze response**. If capture
-  still fails, use **Copy capture diagnostics** under research tools. It copies
+  still fails, use **Copy capture diagnostics** directly below the capture error. It copies
   page structure counts without conversation text, making the layout failure diagnosable.
 - **Connection error:** keep the backend terminal running on the same computer as
   Chrome. Use **Test connection** under research tools.

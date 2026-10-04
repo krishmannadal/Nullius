@@ -86,6 +86,38 @@ class ChatGPTCaptureTests(BrowserTests):
         self.page.set_content('<main><section class="agent-turn"><div class="markdown">Agent answer.</div></section></main>')
         self.assertEqual(self.capture("chat")["text"], "Agent answer.")
 
+    def test_visible_answer_overrides_hidden_ancestor_visibility(self):
+        self.page.locator('main').evaluate("node => node.style.visibility = 'hidden'")
+        self.page.locator('section .markdown').evaluate("node => node.style.visibility = 'visible'")
+        self.assertEqual(self.capture("latest")["text"], "Latest answer.")
+
+    def test_feedback_toolbar_identifies_prose_answers_without_message_markers(self):
+        self.page.set_content('''<main><div class="response"><div class="prose">First answer.</div>
+          <div class="actions"><button aria-label="Good response">Like</button><button aria-label="Read aloud">Listen</button></div></div>
+          <div class="response"><div class="prose">Second answer.</div>
+          <div class="actions"><button aria-label="Good response">Like</button></div></div></main>''')
+        result = self.capture("chat")
+        self.assertEqual(result["text"], "First answer.\n\nSecond answer.")
+        self.assertEqual(result["message_count"], 2)
+
+    def test_feedback_fallback_does_not_merge_user_prompt_into_answer(self):
+        self.page.set_content('''<main><div><div class="user-message-bubble">Private question.</div>
+          <div class="prose">Unidentified content.</div><button aria-label="Good response">Like</button></div></main>''')
+        self.assertFalse(self.capture("chat")["success"])
+
+    def test_explicit_selection_works_in_unrecognized_layout_without_pasting(self):
+        self.page.set_content('<main><section><p>A selected answer passage.</p></section></main>')
+        self.select_text('p', 2, 17)
+        result = self.capture("selection")
+        self.assertEqual(result["text"], "selected answer")
+        self.assertIsNone(result["message_count"])
+        self.assertFalse(self.capture("chat")["success"])
+
+    def test_unrecognized_layout_selection_does_not_capture_composer(self):
+        self.page.set_content('<main><div contenteditable="true"><p>Unsent private text.</p></div></main>')
+        self.select_text('p', 0, 6)
+        self.assertFalse(self.capture("selection")["success"])
+
     def test_complete_chat_deduplicates_nested_roles_but_keeps_repeated_answers(self):
         self.page.set_content('''<article data-turn="assistant"><div data-message-author-role="assistant">
           <div class="markdown">Same answer.</div></div></article>
@@ -249,7 +281,7 @@ class PopupTests(BrowserTests):
               window.requestedScopes.push(options.args[0]);
               return [{frameId:0,result:window.testCaptures?.[options.args[0]] || window.testCapture}];
             }},
-            runtime: {getManifest: () => ({version:'1.4.0'})}
+            runtime: {getManifest: () => ({version:'1.4.1'})}
           };
         """)
         self.page.route(
@@ -331,7 +363,7 @@ class PopupTests(BrowserTests):
         self.assertLess(self.page.locator("#full-btn").bounding_box()["y"], 300)
         self.assertFalse(self.page.locator("#paste-details").evaluate("node => node.open"))
         self.assertFalse(self.page.locator("#advanced-details").evaluate("node => node.open"))
-        self.assertEqual(self.page.locator("#version-label").inner_text(), "v1.4.0")
+        self.assertEqual(self.page.locator("#version-label").inner_text(), "v1.4.1")
         self.assertEqual(self.requests, [])
 
     def test_primary_button_recovers_capture_after_answer_appears(self):
@@ -344,6 +376,22 @@ class PopupTests(BrowserTests):
         self.complete_full_fixture()
         self.assertEqual(self.requests[0][1]["text"], "Answer appeared.")
         self.assertEqual(self.page.locator("#full-btn").inner_text(), "Analyze response")
+
+    def test_evidence_search_retries_capture_and_does_not_submit_missing_text(self):
+        self.page.evaluate("window.testCapture = {success:false,error:'No answer yet.',diagnostics:{assistant_markers:0,markdown_bodies:2}}")
+        self.page.click("#refresh-btn")
+        self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
+        self.assertFalse(self.page.locator("#quick-btn").is_disabled())
+        self.assertTrue(self.page.locator("#diagnostics-btn").is_visible())
+        self.assertIn('"markdown_bodies": 2', self.page.locator("#capture-diagnostics").inner_text())
+        self.page.click("#quick-btn")
+        self.page.wait_for_function("!document.getElementById('quick-btn').disabled")
+        self.assertEqual(self.requests, [])
+        self.page.evaluate("window.testCapture = {success:true,text:'New visible answer.'}")
+        self.page.click("#quick-btn")
+        self.page.wait_for_function("!document.getElementById('export-btn').disabled")
+        self.assertEqual(self.requests[0][1]["text"], "New visible answer.")
+        self.assertTrue(self.page.locator("#diagnostics-btn").is_hidden())
 
     def exported_report(self):
         with self.page.expect_download() as download_info:
@@ -388,7 +436,7 @@ class PopupTests(BrowserTests):
         self.page.select_option("#scope-select", "selection")
         self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
         self.assertEqual(self.requests, [])
-        self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        self.assertFalse(self.page.locator("#quick-btn").is_disabled())
         self.page.evaluate("window.testCaptures.selection = {success:true,text:'Selected passage.',message_count:1}")
         self.page.click("#refresh-btn")
         self.page.wait_for_function("!document.getElementById('quick-btn').disabled")
@@ -429,7 +477,7 @@ class PopupTests(BrowserTests):
         self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
         self.assertFalse(self.page.locator("#paste-details").evaluate("node => node.open"))
         self.assertTrue(self.page.locator("#preview-details").evaluate("node => node.open"))
-        self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        self.assertFalse(self.page.locator("#quick-btn").is_disabled())
         self.page.locator("#paste-details summary").click()
         answer = "  Pasted completed answer.\nSecond paragraph.  "
         self.page.fill("#paste-input", answer)
@@ -499,7 +547,7 @@ class PopupTests(BrowserTests):
         self.page.evaluate("window.testCapture = {success:false,error:'No answer.'}")
         self.page.click("#refresh-btn")
         self.page.wait_for_function("document.getElementById('status-area').className === 'status-error'")
-        self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        self.assertFalse(self.page.locator("#quick-btn").is_disabled())
         self.assertFalse(self.page.locator("#full-btn").is_disabled())
         self.assertEqual(self.requests, [])
 
@@ -525,7 +573,7 @@ class PopupTests(BrowserTests):
             "document.getElementById('status-area').className === 'status-error'"
         )
         self.assertEqual(self.requests, [])
-        self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        self.assertFalse(self.page.locator("#quick-btn").is_disabled())
         self.page.evaluate("window.testCapture = {success:true,text:'Finished.'}")
         self.page.click("#refresh-btn")
         self.page.wait_for_function("!document.getElementById('quick-btn').disabled")
@@ -722,7 +770,7 @@ class PopupTests(BrowserTests):
             download_info.value.save_as(target)
             report = json.loads(target.read_text())
         self.assertEqual(report["schema_version"], "nullius-inspection-export-v1")
-        self.assertEqual(report["extension_version"], "1.4.0")
+        self.assertEqual(report["extension_version"], "1.4.1")
         self.assertEqual(report["capture_source"], "chatgpt-page")
         self.assertEqual(report["captured_text"], "Initial answer.")
         self.assertEqual(report["original_result"], self.backend_data)
@@ -789,7 +837,7 @@ class PopupTests(BrowserTests):
         )
         self.assertEqual(self.page.evaluate("window.injectionCount"), injections)
         self.assertEqual(self.requests, [])
-        self.assertTrue(self.page.locator("#quick-btn").is_disabled())
+        self.assertFalse(self.page.locator("#quick-btn").is_disabled())
 
     def test_connection_probe_is_explicit(self):
         self.page.click("#connection-btn")

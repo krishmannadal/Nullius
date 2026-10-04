@@ -206,6 +206,8 @@
   <button id="refresh-btn">Read ChatGPT again</button>
   <p id="source-label" class="notice" aria-live="polite">Reading your ChatGPT conversation…</p>
   <div id="status-area" role="status" aria-live="polite"></div>
+  <button id="diagnostics-btn" hidden>Copy capture diagnostics</button>
+  <pre id="capture-diagnostics" class="research-note" hidden></pre>
 
   <details id="preview-details">
     <summary>Text to analyze</summary>
@@ -221,7 +223,6 @@
     <button id="quick-btn" disabled>Search evidence only</button>
     <button id="compare-btn" disabled>Compare rules · no new inference</button>
     <button id="export-btn" disabled>Export analysis JSON</button>
-    <button id="diagnostics-btn">Copy capture diagnostics</button>
     <p class="research-note">Analyze response runs claim extraction, evidence retrieval and the NLI verifier. Evidence search only skips the verifier. Scores are uncalibrated research outputs; ★ DECISIVE identifies evidence selected by the aggregation rule.</p>
   </details>
 

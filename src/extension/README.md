@@ -56,7 +56,7 @@ only a cloud backend does not connect your local Chrome to it.
    (the folder directly containing `manifest.json`).
 4. Pin Nullius using Chrome's extensions menu.
 5. Open a ChatGPT conversation and wait for the answer to finish.
-6. Click Nullius and confirm **v1.4.0** appears at the top. Complete chat is selected by default.
+6. Click Nullius and confirm **v1.4.1** appears at the top. Complete chat is selected by default.
 7. Click the blue **Analyze response** button. The answer is read automatically; pasting is optional.
 8. Read the claim verdicts, then expand **View evidence and model scores** for supporting details. Keep the popup open until analysis finishes.
 
@@ -173,7 +173,7 @@ Closing the popup loses local state; download your inspection before closing.
   English "ChatGPT said:" conversation heading, including `display:contents`
   wrappers, agent turns, and conversation articles containing answer bodies.
   User bubbles and user headings are excluded. If automatic capture still fails,
-  use **Copy capture diagnostics** under research tools. The report contains
+  use **Copy capture diagnostics** directly below the capture error. The report contains
   structure counts rather than conversation text. Paste remains an optional fallback.
 - **Still generating:** wait for ChatGPT to finish, then Read ChatGPT again.
 - **Cannot connect:** start the backend locally; check its terminal for dependency,
@@ -221,3 +221,18 @@ permission grant. The onboarding machine's Chromium administrator policy prevent
 loading unpacked extensions; the final real-profile smoke test is manual.
 
 For a short live demonstration, see [the presentation walkthrough](../../docs/PRESENTATION.md).
+
+## Capture recovery in v1.4.1
+
+Both **Analyze response** and **Search evidence only** retry reading ChatGPT when
+clicked, including after an initial capture failure. Nothing is submitted if the
+new capture also fails. Answers whose visible content overrides a hidden ancestor
+are supported, as are answer bodies associated with response feedback controls.
+
+If the page layout is still unrecognized, highlight only the answer passage in
+ChatGPT, open Nullius, choose **Selected text only**, then click **Analyze response**.
+This reads the selection directly without copying or pasting. On an unrecognized
+layout, the exported message count is unknown rather than inferred; visible
+navigation, known user prompts, composer fields and controls are excluded.
+When capture fails, diagnostic counts and their copy button appear immediately
+below the error instead of being hidden among research tools.

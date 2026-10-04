@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function setBusy(value) {
     busy = value;
-    quickBtn.disabled = value || !capturedText;
+    quickBtn.disabled = value;
     // The primary action can retry capture if the page finished loading after popup opening.
     fullBtn.disabled = value;
     diagnosticsBtn.disabled = value;
@@ -96,6 +96,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     const response = frames.find(frame => frame.frameId === 0)?.result;
     lastDiagnostics = response?.diagnostics || null;
+    const diagnosticText = document.getElementById('capture-diagnostics');
+    diagnosticText.hidden = !lastDiagnostics;
+    diagnosticsBtn.hidden = !lastDiagnostics;
+    diagnosticText.textContent = lastDiagnostics ? JSON.stringify(lastDiagnostics, null, 2) : '';
     if (!response?.success || typeof response.text !== 'string' || !response.text.trim()) {
       throw new Error(response?.error || 'Could not capture the latest ChatGPT answer. Refresh the page and try again.');
     }

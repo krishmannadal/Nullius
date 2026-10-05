@@ -195,10 +195,8 @@ class ErrorResponse(BaseModel):
 
 
 class ReaggregateRequest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    run_id: str = Field(..., min_length=1, description="The source execution run ID")
-    target_aggregators: list[str] = Field(..., min_length=1, description="List of aggregators to compare")
+    run_id: str = Field(..., description="The source execution run ID")
+    target_aggregators: list[str] = Field(..., description="List of aggregators to compare")
     aggregator_configs: dict[str, dict[str, Any]] = Field(
         default_factory=dict, 
         description="Optional config per aggregator, keyed by aggregator name"
@@ -247,4 +245,5 @@ class FailureCaseResponse(BaseModel):
     failure_case_id: str = Field(..., description="Unique failure case identifier")
     file_path: str = Field(..., description="Path to persisted failure case JSON file")
     status: str = Field("saved", description="Status of persistence")
+
 

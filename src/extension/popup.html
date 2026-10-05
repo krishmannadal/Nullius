@@ -1,12 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
   <meta charset="utf-8">
-  <title>Nullius · ChatGPT inspection</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      width: 440px;
+      width: 350px;
       margin: 0;
       padding: 16px;
       color: #333;
@@ -33,7 +32,7 @@
       background: #f5f5f5;
       border: 1px solid #ddd;
       border-radius: 4px;
-      max-height: 180px;
+      max-height: 80px;
       overflow-y: auto;
       white-space: pre-wrap;
       word-wrap: break-word;
@@ -89,7 +88,7 @@
       margin-bottom: 4px;
     }
     .badge-likely-checkable { background-color: #e6f4ea; color: #1e8e3e; border: 1px solid #ceead6; }
-    .badge-no-evidence-found { background-color: #f1f3f4; color: #5f6368; border: 1px solid #dadce0; }
+    .badge-no-evidence-found { background-color: #fce8e6; color: #d93025; border: 1px solid #fad2cf; }
     .badge-pending { background-color: #f1f3f4; color: #5f6368; border: 1px solid #dadce0; }
     
     .badge-Supported { background-color: #e6f4ea; color: #1e8e3e; border: 1px solid #ceead6; }
@@ -136,38 +135,9 @@
       font-family: monospace;
       margin-bottom: 4px;
     }
-    table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 10px; }
-    th, td { padding: 6px 4px; border-bottom: 1px solid #ddd; text-align: left; }
-    caption { text-align: left; margin-bottom: 6px; color: #666; }
-    details { margin: 8px 0; font-size: 11px; }
-    summary { cursor: pointer; }
-    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-    .notice { font-size: 12px; color: #555; line-height: 1.5; }
-    #paste-input { box-sizing: border-box; width: 100%; min-height: 100px; padding: 8px; font: inherit; }
-    #paste-btn { margin-top: 8px; }
-    #scope-select { width: 100%; margin-top: 4px; padding: 8px; font: inherit; }
-    #scope-help { margin: 6px 0; }
-    body { background: #f6f8fc; color: #18233b; }
-    h2 { border: 0; margin-bottom: 4px; font-size: 23px; letter-spacing: -0.6px; }
-    .brand { display: flex; align-items: center; justify-content: space-between; }
-    #version-label { font-size: 11px; color: #62718a; }
-    .tagline { margin: 0 0 18px; color: #62718a; font-size: 13px; }
-    #full-btn { padding: 14px; font-size: 16px; background: #2156d9; box-shadow: 0 3px 10px #2156d922; }
-    #full-btn:disabled { background: #94a7cf; }
-    #refresh-btn { margin-top: 8px; background: #e6ecf8; color: #23477d; }
-    #source-label { margin: 8px 0; }
-    #preview-details, #advanced-details, #paste-details { padding: 10px; background: white; border: 1px solid #e0e6f0; border-radius: 8px; }
-    details > summary { font-size: 13px; font-weight: 600; }
-    #preview-box { margin-top: 10px; border: 0; }
-    #advanced-details button { margin-top: 8px; background: #e6ecf8; color: #23477d; }
-    .claim-card { border-radius: 10px; padding: 12px; background: white; border-color: #e0e6f0; }
-    .claim-text { font-style: normal; font-size: 14px; line-height: 1.5; }
-    .verdict-explanation { font-size: 12px; line-height: 1.5; color: #52617a; }
-    .research-note { font-size: 11px; color: #65738a; line-height: 1.5; }
     .pairwise-scores {
       font-size: 10px;
       display: flex;
-      flex-wrap: wrap;
       gap: 8px;
       color: #555;
     }
@@ -188,55 +158,19 @@
   </style>
 </head>
 <body>
-  <div class="brand"><h2>Nullius</h2><span id="version-label"></span></div>
-  <p class="tagline">Explore the evidence behind ChatGPT's answers.</p>
+  <h2>Nullius Inspection Harness</h2>
   
   <div class="section">
-    <label for="scope-select" class="label">Analysis scope</label>
-    <select id="scope-select" aria-describedby="scope-help">
-      <option value="chat" selected>Complete chat (default)</option>
-      <option value="latest">Latest response · full text</option>
-      <option value="selection">Selected text only</option>
-      <option value="pasted" disabled hidden>Pasted text</option>
-    </select>
-    <p id="scope-help" class="notice">All loaded ChatGPT answers in this conversation. Scroll up to load earlier answers before capturing.</p>
+    <div class="label">Response Preview</div>
+    <div id="preview-box">Loading...</div>
   </div>
 
-  <button id="full-btn">Analyze response</button>
-  <button id="refresh-btn">Read ChatGPT again</button>
-  <p id="source-label" class="notice" aria-live="polite">Reading your ChatGPT conversation…</p>
-  <div id="status-area" role="status" aria-live="polite"></div>
-  <button id="diagnostics-btn" hidden>Copy capture diagnostics</button>
-  <pre id="capture-diagnostics" class="research-note" hidden></pre>
+  <button id="quick-btn" disabled>Quick Check</button>
+  <button id="full-btn" disabled>Full Inspection</button>
 
-  <details id="preview-details">
-    <summary>Text to analyze</summary>
-    <div id="preview-box">Loading...</div>
-  </details>
-
+  <div id="status-area"></div>
   <div id="results-area"></div>
-  <div id="comparison-area"></div>
 
-  <details id="advanced-details">
-    <summary>Connection, evidence search &amp; research tools</summary>
-    <button id="connection-btn">Test connection</button>
-    <button id="quick-btn" disabled>Search evidence only</button>
-    <button id="compare-btn" disabled>Compare rules · no new inference</button>
-    <button id="export-btn" disabled>Export analysis JSON</button>
-    <p class="research-note">Analyze response runs claim extraction, evidence retrieval and the NLI verifier. Evidence search only skips the verifier. Scores are uncalibrated research outputs; ★ DECISIVE identifies evidence selected by the aggregation rule.</p>
-  </details>
-
-  <details id="paste-details">
-    <summary>Paste answer instead</summary>
-    <p class="notice">Paste a completed answer or the answers from your chat. Use its full text, or highlight a passage in this box and use only that part.</p>
-    <label for="paste-input">Answer text</label>
-    <textarea id="paste-input" placeholder="Paste the answer you want to inspect" spellcheck="false"></textarea>
-    <button id="paste-btn">Use entire pasted text</button>
-    <button id="paste-selection-btn">Use selected pasted part</button>
-  </details>
-
-  <p class="research-note">Research prototype · limited reference corpus. Missing evidence is not proof of a false statement. No scientific validation is claimed.</p>
-  <p class="notice">Analyze response sends the captured text to your local Nullius backend. Keep this popup open until it finishes.</p>
   <script src="popup.js"></script>
 </body>
 </html>

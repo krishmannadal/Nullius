@@ -2,7 +2,5 @@
   "benchmark_version": "s1-v1.1",
   "benchmark_state": "PRE-ANNOTATION CLEAN",
   "creation_date": "2026-09-12T19:11:59.530361+00:00",
-  "responses_hash_sha256": "8ef976d32392724acb468821a0314787b7e3c6c563e3556381e6b1a5e1672356",
-  "responses_hash_sha256_original_crlf": "cd875b851262f2e8333733ba38aee1554b38c513397f6dc720ebea4ebef6ef21",
-  "hash_note": "Original handoff hash covers CRLF bytes; tracked responses.jsonl uses LF under .gitattributes. Response text and IDs are unchanged."
+  "responses_hash_sha256": "cd875b851262f2e8333733ba38aee1554b38c513397f6dc720ebea4ebef6ef21"
 }

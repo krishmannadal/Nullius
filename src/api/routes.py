@@ -320,8 +320,8 @@ async def annotate_endpoint(
         400: {"model": ErrorResponse, "description": "Invalid aggregator configuration or contract failure"},
         422: {"model": ErrorResponse, "description": "Validation error in request"},
     },
-    summary="Compare Rules on a Stored Inspection",
-    description="Runs aggregation rules on identical server-stored pairwise scores. Runs expire after one hour or a server restart; client-supplied scores are never accepted.",
+    summary="Stateless Reaggregation",
+    description="Runs a single pure aggregation step over identical materialized verdicts.",
 )
 async def reaggregate_endpoint(
     req: ReaggregateRequest,
@@ -403,3 +403,4 @@ async def save_failure_case_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to persist failure case: {exc}",
         ) from exc
+

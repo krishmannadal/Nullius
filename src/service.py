@@ -21,7 +21,8 @@ import json
 import threading
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,14 +38,9 @@ from src.core.interfaces import (
     check_evidence_list,
     check_pair_verdict,
     check_rerank_is_subset,
+    Aggregator,
 )
-from src.core.registry import Pipeline, build, build_pipeline, load_builtins
-from src.core.trace_io import (
-    ALLOWED_FAILURE_CATEGORIES,
-)
-from src.core.trace_io import (
-    save_failure_case as save_failure_case_file,
-)
+from src.core.registry import Pipeline, build_pipeline, build
 from src.core.types import (
     SCHEMA_VERSION,
     Claim,
@@ -54,9 +50,13 @@ from src.core.types import (
     Trace,
     utcnow_iso,
 )
+from src.core.trace_io import (
+    ALLOWED_FAILURE_CATEGORIES,
+    save_failure_case as save_failure_case_file,
+)
 from src.data.corpus import Corpus
 from src.data.examples import Example, load_examples
-from src.pipeline import RunContext, _timed, _Timer, analyze
+from src.pipeline import RunContext, _timed, _Timer, analyze, gold_evidence_for
 
 
 @dataclass
@@ -64,7 +64,7 @@ class ExecutionState:
     run_id: str
     config_hash: str
     git_sha: str | None
-    claims_inputs: dict[str, tuple[Claim, tuple[EvidenceVerdict, ...]]]
+    claims_inputs: dict[str, tuple[Claim, list[EvidenceVerdict]]]
     expires_at: float
     trace: Trace
 
@@ -113,7 +113,6 @@ class NulliusService:
         self._queue_depth = 0
         self._cached_config: dict[str, Any] | None = None
         self._cached_pipeline: Pipeline | None = None
-        self._quick_cache: dict[str, tuple[Any, Any]] = {}
         self._cached_corpus: Corpus | None = None
         self._cached_examples: dict[str, Example] | None = None
         self._execution_store: dict[str, ExecutionState] = {}
@@ -146,16 +145,15 @@ class NulliusService:
         overrides: Sequence[str] | None = None,
     ) -> tuple[dict[str, Any], Pipeline]:
         with self._thread_lock:
-            uses_default = config_path is None or str(config_path) == self.default_config_path
             # If default config without overrides is requested and cached, return it
-            if uses_default and not overrides and self._cached_config is not None and self._cached_pipeline is not None:
+            if config_path is None and not overrides and self._cached_config is not None and self._cached_pipeline is not None:
                 return self._cached_config, self._cached_pipeline
 
             cfg = self._resolve_config(config_path, overrides)
             pipe = build_pipeline(cfg)
 
             # Cache if using default configuration
-            if uses_default and not overrides:
+            if config_path is None and not overrides:
                 self._cached_config = cfg
                 self._cached_pipeline = pipe
 
@@ -167,30 +165,6 @@ class NulliusService:
                 corpus_path = _resolve_repo_path(cfg["paths"]["corpus"])
                 self._cached_corpus = Corpus.from_jsonl(corpus_path)
             return self._cached_corpus
-
-    def _ensure_quick_loaded(
-        self,
-        config_path: str | Path | None = None,
-        overrides: Sequence[str] | None = None,
-    ) -> tuple[dict[str, Any], Any, Any]:
-        """Construct only the configured extractor/retriever for Tier 1.
-
-        A lightweight BM25 config must work without NLI or reranker model files.
-        Cache by resolved configuration so popup requests reuse warm components.
-        """
-        with self._thread_lock:
-            cfg = self._resolve_config(config_path, overrides)
-            key = config_hash(cfg)
-            if key not in self._quick_cache:
-                load_builtins()
-                components = cfg["components"]
-                extractor = build("extractor", components["extractor"])
-                retriever = build("retriever", components["retriever"])
-                if len(self._quick_cache) >= 8:
-                    self._quick_cache.pop(next(iter(self._quick_cache)))
-                self._quick_cache[key] = (extractor, retriever)
-            extractor, retriever = self._quick_cache[key]
-            return cfg, extractor, retriever
 
     def get_examples(self, cfg: Mapping[str, Any]) -> dict[str, Example]:
         with self._thread_lock:
@@ -341,11 +315,11 @@ class NulliusService:
         self._queue_depth += 1
         try:
             async with self._lock:
-                cfg, extractor, retriever = self._ensure_quick_loaded(config_path, overrides)
+                cfg, pipe = self._ensure_loaded(config_path, overrides)
                 timer = _Timer()
 
                 with _timed(timer, "extract_ms"):
-                    claims = extractor.extract(response_text)
+                    claims = pipe.extractor.extract(response_text)
                 if check_contracts:
                     check_claims(claims, response_text)
 
@@ -355,7 +329,7 @@ class NulliusService:
 
                 for claim in claims:
                     with _timed(timer, "retrieve_ms"):
-                        candidates = retriever.retrieve(claim, retrieve_k)
+                        candidates = pipe.retriever.retrieve(claim, retrieve_k)
                     if check_contracts:
                         check_evidence_list(candidates, k=retrieve_k, stage="retrieve")
 
@@ -524,7 +498,7 @@ class NulliusService:
             claims_inputs = {}
             for claim in trace.claims:
                 cv = trace.verdict_by_claim(claim.id)
-                evidence_verdicts = tuple(cv.per_evidence) if cv else ()
+                evidence_verdicts = list(cv.per_evidence) if cv else []
                 claims_inputs[claim.id] = (claim, evidence_verdicts)
 
             # Insert
@@ -583,9 +557,10 @@ class NulliusService:
         }
 
         line = json.dumps(annotated_record, ensure_ascii=False) + "\n"
-        with self._thread_lock, target_file.open("a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.flush()
+        with self._thread_lock:
+            with target_file.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+                fh.flush()
 
         return annotated_record
 
@@ -624,9 +599,7 @@ class NulliusService:
             comparisons[claim_id] = {}
             for target, agg_instance in aggregators.items():
                 # Pass identical, immutable data
-                # Give each rule its own list; a rule cannot reorder or clear the stored
-                # inputs seen by another rule. Individual pairwise records are frozen.
-                claim_verdict: ClaimVerdict = agg_instance.aggregate(claim, list(verdicts)) # type: ignore[attr-defined]
+                claim_verdict: ClaimVerdict = agg_instance.aggregate(claim, verdicts) # type: ignore[attr-defined]
                 comparisons[claim_id][target] = claim_verdict.to_dict()
 
         return {

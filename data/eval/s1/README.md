@@ -1,190 +1,132 @@
-# Nullius S1 Scientific Evaluation Benchmark
+# S1 curated extraction pilot — protocol v2
 
-This directory contains the dataset, guidelines, templates, and metadata for the **S1 Extraction Quality Scientific Evaluation**.
+S1 compares sentence extraction with model-based atomic claim extraction on 30
+frozen texts. It does not evaluate hallucination detection, retrieval, verification,
+aggregation, confidence calibration, or real-world generalization. The dataset is
+**curated synthetic / provenance-unverified**. Source labels do not establish
+15 genuine LLM generations, 10 independently authored human texts, or authorship
+subgroup effects. Length labels overlap. Preserve the texts for adjudication.
 
-## 1. Scientific Objective
+The authoritative state and executed checks are in [S1_READINESS](../../../docs/S1_READINESS.md).
+Historical v1 annotations are drafts; formal v2 submissions require the frozen
+[guidelines](ANNOTATION_GUIDELINES.md), disjoint character spans, explicit operations
+and compound IDs. [Calibration examples](calibration_examples.json) are unrelated
+teaching strings, not benchmark answers. [EVALUATION_PROTOCOL](EVALUATION_PROTOCOL.md)
+fixes estimands, error codes, matching and bootstrap conventions before outputs exist.
 
-The S1 evaluation benchmark measures how accurately claim extractors (`SpacySentenceExtractor` and `LLMClaimExtractor`) extract atomic factual claims from raw model responses and locate their source spans.
+## Identity and independence
 
-To maintain strict scientific validity and prevent data snooping, the benchmark enforces a four-stage protocol:
+The canonical SHA-256 is
+`8ef976d32392724acb468821a0314787b7e3c6c563e3556381e6b1a5e1672356`.
+Only CRLF becomes LF in memory; mixed LF/CRLF is accepted, lone CR is rejected.
+Raw transport bytes are hashed separately. Never edit responses.jsonl to obtain
+an easier annotation or result. A configuration hash is not a complete trace hash.
 
-```text
-               responses.jsonl
-               /             \
-   [Independent]             [Independent]
-         ↓                         ↓
-    Annotator A               Annotator B
-         ↓                         ↓
- annotations_A.jsonl        annotations_B.jsonl
-               \             /
-                \           /
-            Inter-Annotator Agreement
-                        ↓
-                Human Adjudication
-                        ↓
-              gold_annotations.jsonl
-                        ↓
-             System Extractor Evaluation
+Two humans independently annotate all 30 responses, including explicit zero-claim
+completion. They must not see each other's work or any system predictions. The
+annotation UI performs no extraction and requires an independence attestation.
+Attestations and file hashes are audit controls, not proof of a person's conduct.
+Save and retain each original export before adjudication.
+
+## Operator sequence
+
+Run from the repository root with the pinned environment. Commands that write
+scientific artifacts refuse existing destinations. Use a new directory for a new
+run and retain superseded decisions; do not edit a frozen run in place.
+
+```powershell
+python -m src.eval.s1_workflow validate-benchmark
+python -m streamlit run src/ui/s1_annotation.py
 ```
 
----
+Each human selects identity A or B, completes every response, and downloads the
+ZIP. Store its two files as `annotations_A.jsonl` / `review_A.json` or the B
+counterparts under this directory. Renaming the files does not change their bytes.
+Never fabricate these submissions from the teaching examples or tests.
 
-## 2. Directory Contents
-
-- `responses.jsonl`: 30 frozen responses (10 simple-factual, 12 compound-factual, 8 mixed). Contains 15 LLM-generated, 10 human-written, and 5 adversarial texts across short, medium, and long lengths.
-- `ANNOTATION_GUIDELINES.md`: Operational rulebook for human annotators detailing claim criteria, linguistic edge cases, and protocol ambiguities.
-- `annotations_A.template.jsonl`: Empty template file for Annotator A.
-- `annotations_B.template.jsonl`: Empty template file for Annotator B.
-- `metadata.json`: Dataset version, timestamps, and cryptographic hashes for reproducibility.
-
----
-
-## 3. Strict Annotation Independence Protocol
-
-The human annotation process must adhere to the following non-negotiable scientific constraints:
-
-1. **Raw Text Only:** Annotators must read only `responses.jsonl` and `ANNOTATION_GUIDELINES.md`.
-2. **No Extractor Hints:** Annotators must **never** be shown system extractor predictions, LLM outputs, pre-split sentence boundaries, or ranked candidate claims.
-3. **Double-Blind Independence:**
-   - **Annotator A** completes `annotations_A.jsonl` without seeing Annotator B's annotations, extractor outputs, or gold data.
-   - **Annotator B** completes `annotations_B.jsonl` without seeing Annotator A's annotations, extractor outputs, or gold data.
-4. **No Automated Adjudication:** Inter-annotator differences must be adjudicated by human consensus or a designated human adjudicator. No simulated or algorithmic adjudication is permitted.
-5. **No Metric Calculation Before Adjudication:** Extractor precision, recall, F1, and span IoU may only be computed after `gold_annotations.jsonl` is adjudicated and frozen.
-
----
-
-## 4. Annotation Record Schema
-
-Each line in `annotations_A.jsonl` and `annotations_B.jsonl` must be a valid JSON object matching this schema:
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `response_id` | `string` | Must match a valid ID in `responses.jsonl` (e.g. `"s1-resp-01"`). |
-| `claim_id` | `string` | Unique identifier within the file (e.g. `"s1-A-001"`). |
-| `claim_text` | `string` | Standalone, self-contained atomic factual assertion. |
-| `source_span.start` | `integer` | 0-indexed character start position in `response["text"]` (`>= 0`). |
-| `source_span.end` | `integer` | 0-indexed exclusive character end position (`> start`, `<= len(text)`). |
-| `decomposed` | `boolean` | `true` if rewritten/decomposed from span; `false` if exact substring. |
-| `hedged` | `boolean` | `true` if source text hedged or attributed the statement; `false` otherwise. |
-| `annotator_id` | `string` | `"A"` or `"B"` indicating the annotator. |
-| `notes` | `string` | (Optional) Annotator notes on edge cases or ambiguity. |
-
----
-
-## 5. Step-by-Step Annotator Instructions
-
-### For Annotator A:
-1. Copy `annotations_A.template.jsonl` to `annotations_A.jsonl` (or start a new file).
-2. Open `responses.jsonl` and read `ANNOTATION_GUIDELINES.md`.
-3. For each response, identify atomic factual assertions, calculate source spans `[start, end)`, and record each claim.
-4. Validate mechanical compliance:
-   ```bash
-   python scripts/validate_s1_annotations.py data/eval/s1/annotations_A.jsonl --annotator-id A --show-spans
-   ```
-5. Ensure 0 errors before locking `annotations_A.jsonl`.
-
-### For Annotator B:
-1. Copy `annotations_B.template.jsonl` to `annotations_B.jsonl` (or start a new file).
-2. Independently open `responses.jsonl` and read `ANNOTATION_GUIDELINES.md`.
-3. Annotate all 30 responses in complete isolation from Annotator A.
-4. Validate mechanical compliance:
-   ```bash
-   python scripts/validate_s1_annotations.py data/eval/s1/annotations_B.jsonl --annotator-id B --show-spans
-   ```
-5. Ensure 0 errors before locking `annotations_B.jsonl`.
-
----
-
-## 6. Post-Annotation Phase (Agreement & Adjudication)
-
-Only after both `annotations_A.jsonl` and `annotations_B.jsonl` are submitted and validated:
-1. Calculate inter-annotator agreement metrics (span IoU, Token F1, agreement on atomic decomposition count).
-2. Perform human adjudication of discrepant claims to produce `gold_annotations.jsonl`.
-3. Update `metadata.json` with the cryptographic hash of `gold_annotations.jsonl`.
-4. Run downstream extractor evaluation scripts against `gold_annotations.jsonl`.
-
-
-## 7. Independent annotation UI
-
-From the repository root, with the virtual environment active:
-
-```bash
-python -m streamlit run src/ui/s1_annotation.py --server.headless true --server.port 8502
+```powershell
+python -m scripts.validate_s1_annotations data/eval/s1/annotations_A.jsonl --annotator-id A --review data/eval/s1/review_A.json --formal --require-complete
+python -m scripts.validate_s1_annotations data/eval/s1/annotations_B.jsonl --annotator-id B --review data/eval/s1/review_B.json --formal --require-complete
+python -m src.eval.s1_workflow prepare-adjudication
 ```
 
-The page loads the frozen benchmark and guidelines. Enter your own annotator ID
-and guideline version. Specify source offsets, check the displayed source slice,
-and enter each factual assertion yourself. The tool supplies no extractor hints.
-Mark each response reviewed, including any response with zero claims. Adding or
-removing a claim reopens that response for review.
+This creates only `agreement.draft.json` and `adjudication.draft.json`. Humans
+review all A/B claims and candidates, enter one-to-one `human_matches` containing
+`claim_a_id` / `claim_b_id`, and explicitly list `unmatched_a` / `unmatched_b`.
+Mark every response reviewed. Save finalized decisions as `agreement.json`.
+Count agreement is descriptive; lexical suggestions are not semantic agreement.
+Claim-presence kappa remains undefined without a human-defined shared unit universe.
 
-Download your ZIP regularly: session state is volatile. It contains
-`annotations.jsonl` and `review.json`. Resume by uploading both files into a fresh
-session using the same identity, guidelines and benchmark. Resume verifies the
-annotation and response hashes. The app cannot authenticate an annotator or prove
-independence: keep A and B's files and sessions separate yourself. It never writes
-an annotation, gold file, or model cache into the benchmark directory.
+The adjudicator writes `gold_annotations.jsonl` under the v2 claim schema and
+`adjudication.json`, preserving draft fields. Record identity, no-output attestation,
+raw SHA-256 of finalized agreement and gold, response-level notes, exact gold claim
+IDs, zero-claim decisions, and `compound_groups` (`group_id`, `gold_claim_ids`).
+Every decomposed gold claim must belong to exactly one group of at least two claims.
+Use `Get-FileHash -Algorithm SHA256` to obtain raw file hashes (lowercase in JSON).
+No tool generates the human gold for you.
 
-After extracting each ZIP into separate local directories:
-
-```bash
-python -m scripts.validate_s1_annotations /path/to/A/annotations.jsonl \
-  --annotator-id A --review /path/to/A/review.json --require-complete --show-spans
+```powershell
+python -m src.eval.s1_workflow freeze-gold
+python -m src.eval.s1_workflow validate-gold
 ```
 
-`--require-complete` needs the review record. Merely having claims for a response
-cannot distinguish a reviewed zero-claim response from an unfinished response.
-Validation checks structure and completion records, not human claim correctness.
-The existing positional validator command remains supported.
+Only after this succeeds, configure `NULLIUS_LLM_API_KEY` and
+`NULLIUS_LLM_BASE_URL` (a chat-completions endpoint root ending in `/v1`) in the
+process environment. Choose and document the actual provider and model; the
+placeholders below are deliberately not defaults. No credentials are recorded.
 
-## 8. Agreement review after both annotators finish
-
-Only after independent annotation is complete, an adjudicator can run:
-
-```bash
-python -m src.eval.agreement \
-  --responses data/eval/s1/responses.jsonl \
-  --expected-sha256 8ef976d32392724acb468821a0314787b7e3c6c563e3556381e6b1a5e1672356 \
-  --annotations-a /path/to/A/annotations.jsonl --review-a /path/to/A/review.json \
-  --annotations-b /path/to/B/annotations.jsonl --review-b /path/to/B/review.json \
-  --output /path/to/new-agreement-review.json
+```powershell
+python -m scripts.generate_s1_llm_cache --provider PROVIDER --model MODEL --seed 1337
+python -m src.eval.s1_predictions
+python -m src.eval.extraction_eval --prepare-matching
 ```
 
-The report preserves all annotations and source text. Normalized exact matching
-and token F1 >= 0.8 propose candidate pairs; maximum-weight bipartite matching
-suggests one-to-one pairs. Every human decision remains blank. Unmatched claims
-are visible and must also be reviewed; lexical similarity can hide opposite
-polarity. The report never resolves disagreement or creates gold.
+Generation preserves full raw provider JSON, prompts, settings and timestamps;
+parsing failure leaves raw evidence and no complete manifest. There is no automatic
+retry. A descriptive requested revision is not a provider-enforced revision;
+resolved model identity is recorded only when returned. The debug `llm_cached`
+adapter and hand-written debug cache are not admissible S1 runs. Prediction freeze
+preserves duplicates, empty outputs, missing/approximate spans, stable IDs, raw
+indices and model/source identities for both systems.
 
-Count agreement uses Krippendorff interval alpha with responses as units and
-atomic annotation counts as the measurement, including reviewed zero-claim
-responses. No variation yields undefined alpha (`null`), not perfect agreement.
-Equal counts are not semantic claim agreement. Claim-presence Cohen's kappa is
-not calculated: a shared claim universe and explicit absence decisions still
-need a defined, human-coded protocol. Do not infer that the S1 agreement gates
-passed from lexical candidate counts or count alpha alone.
+Humans edit a copy of `predictions/matching.draft.json`, preserving every candidate
+and immutable lexical field. Save as `matching.final.json`. Each candidate needs
+`human_decision` (accept/reject/reassign), `final_match`, and rationale for accepted
+or reassigned pairs. Matching is one-to-one. Include complete unmatched ID lists,
+multilabel error judgments (M/S for unmatched gold/predictions), reviewer identity,
+time, completion, and explicit compound relations with split judgments. Below-0.8
+pairs remain available for human reassignment; suggestions never finalize decisions.
 
-## 9. Integrity and remaining research gates
+```powershell
+python -m src.eval.extraction_eval --freeze-matching
+python -m src.eval.extraction_eval --evaluate --seed 1337 --n-resamples 10000
+```
 
-The original handoff SHA-256 (`cd875b...`) covers CRLF file bytes. Git's existing
-`.gitattributes` stores this JSONL with LF endings; its byte hash is `8ef976d...`.
-Metadata now records both hashes and the reason. Response strings and IDs were
-not changed. Hashes always cover exact bytes; tools do not silently normalize
-uploaded files.
+These create a matching freeze receipt and `predictions/report.json` / `report.md`.
+The JSON contains response-level metrics, pooled micro and response macro metrics,
+matched-pair span coverage, compound measures, taxonomy counts, paired differences
+and response bootstrap intervals. Undefined values are null, not invented zeros.
+A later matching revision must name and hash the retained prior decision file.
+All real-data stages are currently blocked until actual human submissions exist.
 
-All 30 records have `provenance: synthetic-s1`. Their source-type labels are not
-proof of actual human authorship or LLM generation. Establish original sources
-before making source-subgroup scientific claims. The benchmark can still be
-used for annotation-tool practice. This work does not certify its scientific
-provenance or resolve the guideline ambiguities in Section 5 of the guidelines.
+## Verification and boundaries
 
-The LLM-cache script has no provider implementation and now exits nonzero
-without writing placeholder outputs. Evaluation refuses missing or unfrozen
-gold. Candidate generation additionally requires a real frozen LLM cache with `llm_cache_hash_sha256`,
-`llm_cache_model`, `llm_cache_prompt_version` and `llm_cache_frozen_date` in
-metadata, never
-overwrites an existing review CSV, and leaves unmatched decisions blank. Final
-extractor metrics remain unimplemented and fail explicitly rather than reporting
-success. Human annotation, agreement review, human adjudication, gold freezing,
-real provider integration and final metrics are still outstanding. No S1
-predictions or metrics were generated by this change.
+Tests use temporary synthetic fixtures and mocked provider responses only. They
+are engineering checks, never benchmark observations. Install Playwright Chromium
+for browser fixtures. CI installs the pinned dependencies and runs Ruff and pytest.
+Keep the API local to trusted operators: it is not an authenticated public service.
+The extension performs explicit capture; browser fixtures do not establish ongoing
+compatibility with every live ChatGPT interface.
+
+```powershell
+python -m ruff check src tests scripts
+python -m pytest
+python -m scripts.package_extension
+python -m scripts.package_extension --check
+```
+
+The package is built from `src/extension` with deterministic file ordering, LF text,
+fixed ZIP timestamps and no compression variability. Its checksum is recorded in
+`nullius-extension.sha256` and `docs/extension-package.json`. A differing previous
+ZIP is preserved beside it. Load the source directory as an unpacked extension;
+set `NULLIUS_EXTENSION_IDS` to its explicit ID before starting the local API.

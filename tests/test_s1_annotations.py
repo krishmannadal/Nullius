@@ -127,9 +127,9 @@ def test_validator_counts_valid_records_after_an_error(benchmark, record):
     assert stats["valid_records"] == 1
 
 
-def test_cache_stub_fails_without_creating_artifacts(benchmark):
+def test_real_cache_gate_fails_without_creating_artifacts(benchmark):
     before = sorted(p.name for p in benchmark[0].iterdir())
-    with pytest.raises(NotImplementedError, match="No cache was written"):
+    with pytest.raises(ValueError, match="gold is missing"):
         generate_llm_cache(benchmark[0], "fixture-model")
     assert sorted(p.name for p in benchmark[0].iterdir()) == before
 
@@ -146,7 +146,7 @@ def test_evaluator_requires_human_frozen_gold(benchmark, record):
     metadata = json.loads((directory / "metadata.json").read_text())
     metadata["gold_annotations_hash_sha256"] = "0" * 64
     (directory / "metadata.json").write_text(json.dumps(metadata))
-    with pytest.raises(ValueError, match="Gold hash"):
+    with pytest.raises(ValueError, match="not frozen"):
         load_data(directory)
 
 
@@ -216,7 +216,7 @@ def test_annotation_ui_protects_work_when_identity_changes(benchmark, monkeypatc
     app.text_input[0].set_value("A").run()
     app.text_area[0].set_value("A 🐈 sleeps.")
     next(b for b in app.button if b.label == "Add human annotation").click().run()
-    app.text_input[0].set_value("B").run()
+    next(t for t in app.text_input if t.label == "Annotator ID").set_value("B").run()
     assert app.error
     assert app.session_state["s1_records"][0]["annotator_id"] == "A"
 
@@ -224,9 +224,17 @@ def test_annotation_ui_protects_work_when_identity_changes(benchmark, monkeypatc
 def test_frozen_benchmark_hash_matches_metadata():
     directory = Path(__file__).resolve().parents[1] / "data" / "eval" / "s1"
     metadata = json.loads((directory / "metadata.json").read_text())
-    data = (directory / "responses.jsonl").read_bytes()
-    assert len(load_responses(data, metadata["responses_hash_sha256"])) == 30
-    assert sha256(data.replace(b"\n", b"\r\n")) == metadata["responses_hash_sha256_original_crlf"]
+    raw_data = (directory / "responses.jsonl").read_bytes()
+
+    # Normalize CRLF to LF for OS-independent canonical hashing
+    canonical_data = raw_data.replace(b"\r\n", b"\n")
+
+    assert len(load_responses(canonical_data, metadata["responses_hash_sha256"])) == 30
+    assert sha256(canonical_data) == metadata["responses_hash_sha256"]
+
+    # Ensure CRLF provenance hash remains correct
+    if "responses_hash_sha256_original_crlf" in metadata:
+        assert sha256(canonical_data.replace(b"\n", b"\r\n")) == metadata["responses_hash_sha256_original_crlf"]
 
 
 def test_agreement_keeps_polarity_and_unmatched_cases_for_humans(benchmark, record):

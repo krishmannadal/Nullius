@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Nullius Inspection Harness",
   "version": "1.0.0",
-  "description": "Research inspection instrument. Flags claim-level hallucination states.",
+  "description": "Research inspection instrument. Exposes claims, evidence and uncertain verification decisions.",
   "permissions": [
     "activeTab",
     "scripting"

@@ -25,6 +25,8 @@ and a BM25-only run on a machine without CUDA must not pay for that.
 from __future__ import annotations
 
 import functools
+import hashlib
+import importlib.metadata
 import json
 import re
 from collections.abc import Sequence
@@ -45,7 +47,7 @@ from src.data.corpus import Corpus
 
 
 @functools.lru_cache(maxsize=8)
-def load_corpus_cached(path: str) -> Corpus:
+def _load_corpus_version(path: str, digest: str) -> Corpus:
     """One Corpus object per path per process.
 
     A HybridRetriever builds a BM25 arm and a dense arm, and both need the corpus.
@@ -53,6 +55,14 @@ def load_corpus_cached(path: str) -> Corpus:
     to disagree about row order if the file changed between loads.
     """
     return Corpus.from_jsonl(path)
+
+
+def load_corpus_cached(path: str) -> Corpus:
+    resolved = str(Path(path).resolve())
+    return _load_corpus_version(resolved, hashlib.sha256(Path(resolved).read_bytes()).hexdigest())
+
+
+load_corpus_cached.cache_clear = _load_corpus_version.cache_clear
 
 
 def _accepts_param(cls: type, name: str) -> bool:
@@ -165,6 +175,7 @@ class DenseRetriever(Retriever):
         batch_size: int = 64,
         device: str | None = None,
         rebuild: bool = False,
+        revision: str | None = None,
     ) -> None:
         super().__init__()
         self.corpus_path = str(corpus_path)
@@ -185,15 +196,26 @@ class DenseRetriever(Retriever):
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
-        self.encoder = SentenceTransformer(model_name, device=device)
+        self.encoder = SentenceTransformer(model_name, device=device, revision=revision)
+        model_config = getattr(getattr(self.encoder[0], "auto_model", None), "config", None)
+        self.model_identity = {"model": model_name, "requested_revision": revision,
+                               "resolved_revision": getattr(model_config, "_commit_hash", None),
+                               "device": device}
         self.dim = int(self.encoder.get_sentence_embedding_dimension())
+        self.embedding_identity = {
+            "model": model_name, "revision": self.model_identity["resolved_revision"] or revision,
+            "max_seq_length": self.encoder.max_seq_length, "dimension": self.dim,
+            "sentence_transformers": importlib.metadata.version("sentence-transformers"),
+            "normalize_embeddings": True,
+        }
         self.index = self._load_or_build_index()
 
     # ------------------------------------------------------------------ index
 
     def _index_paths(self) -> tuple[Path, Path]:
         slug = self.model_name.replace("/", "__")
-        stem = f"{slug}-{self.corpus.fingerprint()}"
+        identity_hash = hashlib.sha256(json.dumps(self.embedding_identity, sort_keys=True).encode()).hexdigest()[:12]
+        stem = f"{slug}-{self.corpus.fingerprint()}-{identity_hash}"
         return (self.index_dir / f"{stem}.faiss", self.index_dir / f"{stem}.manifest.json")
 
     def _load_or_build_index(self):
@@ -233,6 +255,7 @@ class DenseRetriever(Retriever):
                     "corpus_path": self.corpus_path,
                     "n_sentences": len(self.corpus),
                     "model_name": self.model_name,
+                    "embedding_identity": self.embedding_identity,
                     "dim": self.dim,
                     "normalized": True,
                     "index_type": "IndexFlatIP",
@@ -246,6 +269,7 @@ class DenseRetriever(Retriever):
     def _check_manifest(self, manifest: dict[str, Any]) -> None:
         """Refuse a stale index rather than returning confidently wrong sentences."""
         checks = [
+            ("embedding_identity", self.embedding_identity),
             ("corpus_fingerprint", self.corpus.fingerprint()),
             ("corpus_content_fingerprint", self.corpus.content_fingerprint()),
             ("model_name", self.model_name),
@@ -363,7 +387,7 @@ class HybridRetriever(Retriever):
         # from incompatible sentence numbering: same id string, different sentence.
         # RRF would then "agree" about a document neither arm actually returned.
         fingerprints = {
-            arm.corpus.fingerprint(): type(arm).__name__
+            (arm.corpus.fingerprint(), arm.corpus.content_fingerprint()): type(arm).__name__
             for arm in self.arms
             if getattr(arm, "corpus", None) is not None
         }

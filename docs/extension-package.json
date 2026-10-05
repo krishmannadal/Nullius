@@ -1,0 +1,13 @@
+{
+  "sha256": "942891d1df4e6adf5c87be983cc883f752b42c2b44e7c10bb16ef83a82b11091",
+  "source": "src/extension",
+  "eol": "canonical LF",
+  "compression": "stored",
+  "timestamp": "1980-01-01T00:00:00",
+  "files": {
+    "content.js": "002a65d722cdf3b797eeb3c2a032be81df81c6b0a3d88600323877c24a290527",
+    "manifest.json": "fe115b4798051908b9f65a2db8c31f3cada54cddefdcf06bf7eee46203869037",
+    "popup.html": "170569bb1525860cb6d9fb11149f2d80ed2d5f11b942e585d87727faee706efe",
+    "popup.js": "70d6e559a83137fdae57cc2ce552920bb30a9a0f1f935fc543b40c4aaa604124"
+  }
+}

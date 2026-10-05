@@ -32,11 +32,14 @@ producing a subtly wrong trace that looks fine.
 
 from __future__ import annotations
 
+import hashlib
 import time
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
-from src.core.config import config_hash, git_is_dirty, git_sha
+from src.core.config import config_hash, git_is_dirty, git_sha, project_root
 from src.core.interfaces import (
     check_claims,
     check_evidence_list,
@@ -127,11 +130,20 @@ class RunContext:
 
     @classmethod
     def create(cls, cfg: dict[str, Any], pipe: Pipeline) -> RunContext:
+        data_identity = {}
+        for name in ("corpus", "examples"):
+            value = cfg.get("paths", {}).get(name)
+            if value:
+                path = Path(value)
+                path = path if path.is_absolute() else project_root() / path
+                if path.is_file():
+                    data_identity[name] = {"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
         resolved = {
-            "config": {k: v for k, v in cfg.items() if not str(k).startswith("_")},
+            "config": deepcopy({k: v for k, v in cfg.items() if not str(k).startswith("_")}),
             "components": pipe.describe(),
             "git_dirty": git_is_dirty(),
             "config_path": cfg.get("_config_path"),
+            "data_identity": data_identity,
         }
         return cls(
             run_id=new_run_id(),
@@ -198,21 +210,27 @@ def analyze(
             check_rerank_is_subset(candidates, reranked)
             check_evidence_list(reranked, k=k, stage="rerank")
 
-        reranked = mark_gold(reranked, gold_ids) if example else reranked
-        evidence_by_claim[claim.id] = tuple(reranked)
+        # Reference flags belong to the trace, never verifier/reranker inputs.
+        evidence_by_claim[claim.id] = tuple(mark_gold(reranked, gold_ids) if example else reranked)
 
         # ---- verify (one call per pair, never batched -- ADR-002) -----------
         pair_verdicts: list[EvidenceVerdict] = []
         with _timed(timer, "verify_ms"):
             for ev in reranked:
-                pv = pipe.verifier.score(claim, ev)
+                clean_ev = replace(ev, is_gold=False, retriever_meta={
+                    k: v for k, v in ev.retriever_meta.items() if k not in {"source", "rank_is_annotation_order"}
+                })
+                pv = pipe.verifier.score(claim, clean_ev)
                 if check_contracts:
                     check_pair_verdict(pv, claim, ev)
                 pair_verdicts.append(pv)
 
         # ---- aggregate -------------------------------------------------------
         with _timed(timer, "aggregate_ms"):
-            verdicts.append(pipe.aggregator.aggregate(claim, pair_verdicts))
+            verdict = pipe.aggregator.aggregate(deepcopy(claim), tuple(pair_verdicts))
+            if verdict.per_evidence != tuple(pair_verdicts):
+                raise ValueError("Aggregator changed the original pairwise verdicts")
+            verdicts.append(verdict)
 
     return Trace(
         run_id=ctx.run_id,

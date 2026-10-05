@@ -18,38 +18,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusArea.style.display = 'none';
   }
 
-  // 1. Inject content script and capture text on popup load
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
-    // Inject the content script if not already injected
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ['content.js']
-    });
-
-    // Send message to capture response
-    chrome.tabs.sendMessage(tab.id, { type: "CAPTURE_RESPONSE" }, (response) => {
-      if (chrome.runtime.lastError) {
-        previewBox.textContent = "Error: Could not connect to page. Make sure you are on a supported site (e.g. chatgpt.com).";
-        return;
-      }
-
-      if (!response || !response.success) {
-        previewBox.textContent = response?.error || "Unknown error capturing response.";
-        return;
-      }
-
-      // Success
-      capturedText = response.text;
-      const preview = capturedText.length > 200 ? capturedText.substring(0, 200) + '...' : capturedText;
-      previewBox.textContent = preview;
-      quickBtn.disabled = false;
-      fullBtn.disabled = false;
-    });
-  } catch (err) {
-    previewBox.textContent = `Error injecting script: ${err.message}`;
+  // Bound browser-message waits as well as HTTP response-body reads.
+  async function bounded(promise, milliseconds = 4000) {
+    let timer;
+    try {
+      return await Promise.race([promise, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Page capture timed out. Reopen the popup.')), milliseconds);
+      })]);
+    } finally { clearTimeout(timer); }
   }
+
+  async function refreshCapture() {
+    const [tab] = await bounded(chrome.tabs.query({active: true, currentWindow: true}));
+    if (!tab || !/^https:\/\/(chatgpt\.com|chat\.openai\.com)\//.test(tab.url || '')) throw new Error('Open a ChatGPT conversation.');
+    await bounded(chrome.scripting.executeScript({target: {tabId: tab.id}, files: ['content.js']}));
+    const result = await bounded(chrome.tabs.sendMessage(tab.id, {type: 'CAPTURE_RESPONSE'}));
+    if (!result?.success) throw new Error(result?.error || 'Capture failed');
+    capturedText = result.text;
+    previewBox.textContent = capturedText.slice(0, 200);
+  }
+
+  try {
+    await refreshCapture();
+    quickBtn.disabled = false;
+    fullBtn.disabled = false;
+  } catch (err) {
+    previewBox.textContent = err.message;
+  }
+  window.addEventListener('pagehide', () => {
+    // Popup state is intentionally ephemeral; reopening always captures again.
+    capturedText = null;
+  });
 
   // 2. Handle Quick Check button click (F1 flow: POST /verify/quick, 5s timeout)
   quickBtn.addEventListener('click', async () => {
@@ -65,6 +64,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout for quick check
 
     try {
+      await refreshCapture();
       const response = await fetch('http://127.0.0.1:8000/verify/quick', {
         method: 'POST',
         headers: {
@@ -79,8 +79,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         signal: controller.signal
       });
       
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
         const errorText = await response.text();
         showStatus(`Backend error (${response.status}): ${errorText}`, true);
@@ -118,6 +116,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout for full check
 
     try {
+      await refreshCapture();
       const response = await fetch('http://127.0.0.1:8000/verify/full', {
         method: 'POST',
         headers: {
@@ -132,8 +131,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         signal: controller.signal
       });
       
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
         const errorText = await response.text();
         showStatus(`Backend error (${response.status}): ${errorText}`, true);
@@ -335,7 +332,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (isDecisive) {
             const decisiveBadge = document.createElement('span');
             decisiveBadge.className = 'badge badge-decisive';
-            decisiveBadge.textContent = '★ DECISIVE';
+            decisiveBadge.textContent = '\u2605 DECISIVE';
             evMeta.appendChild(decisiveBadge);
           }
           

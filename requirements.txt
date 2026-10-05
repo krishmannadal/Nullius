@@ -48,3 +48,7 @@ uvicorn==0.30.6
 pydantic==2.9.2
 requests==2.32.3
 streamlit==1.38.0
+
+# Browser regression tests and static checks
+playwright==1.63.0
+ruff==0.16.5

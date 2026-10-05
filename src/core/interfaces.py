@@ -61,6 +61,7 @@ class Component(ABC):
             "name": self.name,
             "class": f"{type(self).__module__}.{type(self).__qualname__}",
             "params": dict(getattr(self, "resolved_params", {}) or {}),
+            "model_identity": getattr(self, "model_identity", None),
         }
 
     def __repr__(self) -> str:  # pragma: no cover - debugging affordance
@@ -170,6 +171,8 @@ def check_claims(claims: Sequence[Claim], response: str) -> None:
         raise ContractError("ClaimExtractor returned duplicate claim ids")
     for c in claims:
         if c.source_span is not None:
+            if not 0 <= c.source_span.start < c.source_span.end <= len(response):
+                raise ContractError("Claim source span outside response or empty")
             span_text = c.source_span.text_from(response)
             if span_text != c.text:
                 if c.extractor_meta.get("span_is_exact") is False:
@@ -199,6 +202,11 @@ def check_rerank_is_subset(before: Sequence[Evidence], after: Sequence[Evidence]
     unknown = {e.id for e in after} - {e.id for e in before}
     if unknown:
         raise ContractError(f"Reranker introduced evidence not in its input: {sorted(unknown)}")
+    original = {e.id: e for e in before}
+    for evidence in after:
+        prior = original[evidence.id]
+        if (evidence.doc_id, evidence.sent_id, evidence.text) != (prior.doc_id, prior.sent_id, prior.text):
+            raise ContractError("Reranker changed evidence content/address under an existing ID")
 
 
 def check_pair_verdict(verdict: EvidenceVerdict, claim: Claim, ev: Evidence) -> None:

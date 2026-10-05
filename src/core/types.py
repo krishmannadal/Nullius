@@ -403,7 +403,7 @@ class EvidenceVerdict:
             _check_unit("similarity", float(self.similarity), lo=-1.0, hi=1.0)
         if n_present == 0 and self.similarity is None:
             raise ValueError("an EvidenceVerdict with no probabilities and no similarity is empty")
-        if self.latency_ms < 0:
+        if not math.isfinite(self.latency_ms) or self.latency_ms < 0:
             raise ValueError(f"latency_ms must be >= 0, got {self.latency_ms}")
         if self.evidence_rank is not None and self.evidence_rank < 1:
             raise ValueError(f"evidence_rank is 1-based, got {self.evidence_rank}")
@@ -485,6 +485,16 @@ class ClaimVerdict:
                 f"(aggregator={self.aggregator_name!r}); the UI renders these."
             )
         _check_json_safe("aggregation_trace", self.aggregation_trace)
+        for key in ("rule", "explanation"):
+            if not isinstance(self.aggregation_trace[key], str) or not self.aggregation_trace[key].strip():
+                raise ValueError(f"aggregation_trace {key} must be nonempty text")
+        decisive = self.aggregation_trace["decisive_evidence_ids"]
+        available = {ev.evidence_id for ev in self.per_evidence}
+        if (not isinstance(decisive, list) or any(not isinstance(x, str) for x in decisive)
+                or len(set(decisive)) != len(decisive) or set(decisive) - available):
+            raise ValueError("decisive evidence IDs must be unique members of pairwise inputs")
+        if len(available) != len(self.per_evidence):
+            raise ValueError("duplicate pairwise evidence verdict")
         if self.label is Label.ABSTAIN and not self.abstained:
             raise ValueError("label=Abstain requires abstained=True")
 
@@ -544,6 +554,13 @@ class Trace:
         if len(set(claim_ids)) != len(claim_ids):
             raise ValueError("duplicate claim ids in trace")
         known = set(claim_ids)
+        if set(self.evidence_by_claim) - known:
+            raise ValueError("evidence_by_claim references unknown claim")
+        if set(self.evidence_by_claim) != known:
+            raise ValueError("trace requires evidence entries for every claim")
+        verdict_ids = [v.claim_id for v in self.verdicts]
+        if len(verdict_ids) != len(set(verdict_ids)) or set(verdict_ids) != known:
+            raise ValueError("trace requires exactly one verdict per claim")
 
         for cid in self.evidence_by_claim:
             if cid not in known:
@@ -554,12 +571,16 @@ class Trace:
                 raise ValueError(f"verdict references unknown claim {verdict.claim_id!r}")
             available = {e.id for e in self.evidence_by_claim.get(verdict.claim_id, ())}
             scored = {ev.evidence_id for ev in verdict.per_evidence}
+            if len(available) != len(self.evidence_by_claim[verdict.claim_id]):
+                raise ValueError("duplicate evidence in trace")
             dangling = scored - available
             if dangling:
                 raise ValueError(
                     f"claim {verdict.claim_id!r}: verdict scores evidence never given to it: "
                     f"{sorted(dangling)}. This is an index-alignment bug."
                 )
+            if scored != available:
+                raise ValueError("trace has unscored evidence")
         if self.mode not in ("retrieved", "oracle"):
             raise ValueError(f"mode must be 'retrieved' or 'oracle', got {self.mode!r}")
         _check_json_safe("resolved_config", self.resolved_config)

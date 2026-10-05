@@ -27,6 +27,22 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def canonical_bytes(data: bytes) -> bytes:
+    """Normalize CRLF transport only; mixed LF/CRLF is accepted, lone CR rejected.
+
+    No JSON reserialization, Unicode normalization or text-content rewriting occurs.
+    Escaped JSON characters are unaffected.
+    """
+    normalized = data.replace(b"\r\n", b"\n")
+    if b"\r" in normalized:
+        raise AnnotationError("lone CR is not an accepted text transport newline")
+    return normalized
+
+
+def canonical_sha256(data: bytes) -> str:
+    return sha256(canonical_bytes(data))
+
+
 def read_jsonl(data: bytes, label: str) -> list[dict[str, Any]]:
     try:
         text = data.decode("utf-8")
@@ -53,11 +69,12 @@ def _nonempty_string(value: Any, label: str) -> str:
 
 
 def load_responses(data: bytes, expected_sha256: str | None = None) -> dict[str, str]:
+    canonical_bytes(data)
     if expected_sha256 is not None:
         expected = expected_sha256.strip().lower()
         if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
             raise AnnotationError("expected_sha256: expected 64 hexadecimal characters")
-        if sha256(data) != expected:
+        if canonical_sha256(data) != expected:
             raise AnnotationError("responses: SHA-256 differs from the frozen benchmark")
     responses = {}
     for number, record in enumerate(read_jsonl(data, "responses"), 1):
@@ -80,11 +97,14 @@ def validate_annotations(
     records: list[dict[str, Any]],
     responses: dict[str, str],
     annotator_id: str | None = None,
+    *,
+    formal: bool = False,
 ) -> ValidationResult:
     seen = set()
     annotated = set()
     warnings = []
     identities = set()
+    assertions = set()
     required = {
         "response_id",
         "claim_id",
@@ -103,6 +123,9 @@ def validate_annotations(
         claim_id = _nonempty_string(record["claim_id"], f"{label}:claim_id")
         claim_text = _nonempty_string(record["claim_text"], f"{label}:claim_text")
         identity = _nonempty_string(record["annotator_id"], f"{label}:annotator_id")
+        allowed = required | {"notes", "schema_version", "source_spans", "operations", "compound_id"}
+        if set(record) - allowed:
+            raise AnnotationError(f"{label}: unexpected/contaminating fields: {sorted(set(record) - allowed)}")
         identities.add(identity)
         if annotator_id is not None and identity != annotator_id:
             raise AnnotationError(f"{label}: annotator_id does not match this session")
@@ -129,7 +152,42 @@ def validate_annotations(
             raise AnnotationError(f"{label}:source_span: outside [0, {len(text)}] or empty")
         if not text[start:end].strip():
             raise AnnotationError(f"{label}:source_span: contains only whitespace")
-        if not record["decomposed"] and text[start:end] != claim_text:
+        modern = record.get("schema_version") == "s1-claim-v2"
+        if formal and not modern:
+            raise AnnotationError(f"{label}: formal submission requires s1-claim-v2")
+        if modern:
+            spans = record.get("source_spans")
+            operations = record.get("operations")
+            if not isinstance(spans, list) or not spans or spans[0] != span:
+                raise AnnotationError(f"{label}: source_spans must begin with source_span")
+            previous_end = -1
+            for part in spans:
+                if not isinstance(part, dict) or set(part) != {"start", "end"}:
+                    raise AnnotationError(f"{label}: invalid source_spans")
+                a, b = part["start"], part["end"]
+                if type(a) is not int or type(b) is not int or not 0 <= a < b <= len(text):
+                    raise AnnotationError(f"{label}: invalid span bounds")
+                if a < previous_end or text[a:b] != text[a:b].strip():
+                    raise AnnotationError(f"{label}: spans must be ordered, disjoint and trimmed")
+                previous_end = b
+            if not isinstance(operations, list) or any(not isinstance(op, str) for op in operations) or len(set(operations)) != len(operations) or any(
+                op not in {"decomposition", "rewrite", "coreference"} for op in operations
+            ):
+                raise AnnotationError(f"{label}: invalid operations")
+            if record["decomposed"] != ("decomposition" in operations):
+                raise AnnotationError(f"{label}: decomposed describes only decomposition")
+            group = record.get("compound_id")
+            if group is not None:
+                _nonempty_string(group, f"{label}:compound_id")
+            if record["decomposed"] and group is None:
+                raise AnnotationError(f"{label}: decomposition needs compound_id")
+            if not operations and (len(spans) != 1 or text[start:end] != claim_text):
+                raise AnnotationError(f"{label}: unchanged claim must equal its source slice")
+            assertion = (response_id, claim_text, json.dumps(spans, sort_keys=True))
+            if assertion in assertions:
+                raise AnnotationError(f"{label}: duplicate assertion at identical source regions")
+            assertions.add(assertion)
+        if not modern and not record["decomposed"] and text[start:end] != claim_text:
             warnings.append(
                 f"{label}: non-decomposed claim differs from source slice; human review required"
             )
@@ -145,17 +203,25 @@ def validate_review(
     annotations_data: bytes,
     records: list[dict[str, Any]],
     require_complete: bool = False,
+    guideline_sha256: str | None = None,
 ) -> None:
     """Verify explicit response completion, including responses with zero claims."""
-    if review.get("schema_version") != "s1-annotation-review-v1":
+    if review.get("schema_version") not in {"s1-annotation-review-v1", "s1-annotation-review-v2"}:
         raise AnnotationError("review: unsupported schema_version")
-    if review.get("responses_sha256") != sha256(responses_data):
+    if review.get("responses_sha256") != canonical_sha256(responses_data):
         raise AnnotationError("review: response hash differs from this benchmark")
     if review.get("annotations_sha256") != sha256(annotations_data):
         raise AnnotationError("review: annotation hash differs from this export")
     identity = _nonempty_string(review.get("annotator_id"), "review:annotator_id")
     _nonempty_string(review.get("guideline_version"), "review:guideline_version")
-    validate_annotations(records, responses, identity)
+    validate_annotations(records, responses, identity, formal=guideline_sha256 is not None)
+    if guideline_sha256 is not None:
+        if review.get("guidelines_sha256") != guideline_sha256:
+            raise AnnotationError("review: stale guideline content hash")
+        if review.get("independent_no_system_outputs") is not True:
+            raise AnnotationError("review: independent human annotation attestation required")
+        if not isinstance(review.get("responses_raw_sha256"), str) or len(review["responses_raw_sha256"]) != 64:
+            raise AnnotationError("review: raw transport hash required")
     completed = review.get("completed_response_ids")
     if not isinstance(completed, list) or any(not isinstance(x, str) for x in completed):
         raise AnnotationError("review: completed_response_ids must be a list of strings")
@@ -164,6 +230,10 @@ def validate_review(
     if require_complete and set(completed) != responses.keys():
         missing = sorted(responses.keys() - set(completed))
         raise AnnotationError(f"review: responses not completed: {', '.join(missing)}")
+    if guideline_sha256 is not None:
+        expected_zero = sorted(set(completed) - {r["response_id"] for r in records})
+        if review.get("zero_claim_response_ids") != expected_zero:
+            raise AnnotationError("review: explicit zero-claim responses differ")
 
 
 def export_annotations(records: list[dict[str, Any]]) -> bytes:
@@ -176,12 +246,20 @@ def make_review(
     annotator_id: str,
     guideline_version: str,
     completed_response_ids: list[str],
+    guideline_sha256: str | None = None,
+    independent_no_system_outputs: bool = False,
 ) -> dict[str, Any]:
     return {
-        "schema_version": "s1-annotation-review-v1",
-        "responses_sha256": sha256(responses_data),
+        "schema_version": "s1-annotation-review-v2" if guideline_sha256 else "s1-annotation-review-v1",
+        "responses_sha256": canonical_sha256(responses_data),
+        "responses_raw_sha256": sha256(responses_data),
         "annotations_sha256": sha256(annotations_data),
         "annotator_id": annotator_id,
         "guideline_version": guideline_version,
         "completed_response_ids": sorted(completed_response_ids),
+        "guidelines_sha256": guideline_sha256,
+        "independent_no_system_outputs": independent_no_system_outputs,
+        "zero_claim_response_ids": sorted(set(completed_response_ids) - {
+            r["response_id"] for r in read_jsonl(annotations_data, "annotations")
+        }),
     }

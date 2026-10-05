@@ -307,7 +307,7 @@ def test_adversarial_trace_serialization():
         aggregation_trace={
             "rule": "adv_rule\n",
             "explanation": "adv_exp",
-            "decisive_evidence_ids": [ev.id, ev.id], # duplicates
+            "decisive_evidence_ids": [ev.id],
             "nested": {"array": [1, 2, 3]}
         }
     )

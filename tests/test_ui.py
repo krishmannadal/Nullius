@@ -17,12 +17,10 @@ Requires NO live backend, NO model downloads, and NO GPU.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 from streamlit.testing.v1 import AppTest
 
@@ -31,9 +29,7 @@ from src.ui.app import (
     DEFAULT_TIMEOUT,
     build_endpoint_url,
     format_http_error,
-    send_analyze_request,
     send_oracle_request,
-    send_reaggregate_request,
     send_save_failure_case_request,
     validate_response_payload,
 )

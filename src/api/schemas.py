@@ -6,6 +6,7 @@ models are used strictly at the API boundary for request validation and OpenAPI 
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -86,7 +87,37 @@ class HealthResponse(BaseModel):
     components: dict[str, Any] = Field(default_factory=dict, description="Active registered components")
 
 
-class AnalyzeRequest(BaseModel):
+class LocalConfigRequest(BaseModel):
+    """HTTP callers select repository configs; full filesystem control stays local."""
+
+    @field_validator("config_path", check_fields=False)
+    @classmethod
+    def local_config(cls, value):
+        if value is None:
+            return value
+        root = Path(__file__).resolve().parents[2]
+        candidate = (root / value).resolve()
+        if not candidate.is_relative_to(root / "configs") or candidate.suffix not in {".yaml", ".yml"}:
+            raise ValueError("HTTP config_path must name a YAML file within repository configs")
+        return str(candidate)
+
+    @field_validator("overrides", check_fields=False)
+    @classmethod
+    def bounded_overrides(cls, values):
+        for value in values or []:
+            key, separator, raw = value.partition("=")
+            if key.strip() not in {"pipeline.k", "seed"} or not separator:
+                raise ValueError("HTTP overrides permit pipeline.k and seed only; edit trusted configs locally")
+            try:
+                number = int(raw)
+            except ValueError as exc:
+                raise ValueError("HTTP overrides require integer values") from exc
+            if key.strip() == "pipeline.k" and not 1 <= number <= 100:
+                raise ValueError("pipeline.k must be between 1 and 100")
+        return values
+
+
+class AnalyzeRequest(LocalConfigRequest):
     text: str = Field(..., min_length=1, description="Response text to extract claims from and verify")
     config_path: str | None = Field(None, description="Optional path to config file relative to project root")
     overrides: list[str] | None = Field(None, description="Config overrides in dot-notation e.g. ['pipeline.k=3']")
@@ -111,7 +142,7 @@ class AnalyzeResponse(BaseModel):
     schema_version: str = Field(..., description="Schema version of trace")
 
 
-class AnalyzeOracleRequest(BaseModel):
+class AnalyzeOracleRequest(LocalConfigRequest):
     example_id: str | None = Field(None, description="Example ID from loaded dataset (e.g. 'fever-dev-5688')")
     response_text: str | None = Field(None, description="Response text matching an example in the dataset")
     config_path: str | None = Field(None, description="Optional path to config file")
@@ -133,7 +164,7 @@ class QuickClaimResultSchema(BaseModel):
     top_evidence_source: str | None = Field(None, description="doc_id:sent_id of top hit")
 
 
-class VerifyQuickRequest(BaseModel):
+class VerifyQuickRequest(LocalConfigRequest):
     text: str = Field(..., min_length=1, description="Response text to decompose and check evidence availability")
     config_path: str | None = Field(None, description="Optional path to config file")
     overrides: list[str] | None = Field(None, description="Config overrides in dot-notation")
@@ -152,7 +183,7 @@ class VerifyQuickResponse(BaseModel):
     config_hash: str = Field(..., description="Hash of resolved configuration")
 
 
-class VerifyFullRequest(BaseModel):
+class VerifyFullRequest(LocalConfigRequest):
     text: str = Field(..., min_length=1, description="Response text to verify with full pipeline")
     config_path: str | None = Field(None, description="Optional path to config file")
     overrides: list[str] | None = Field(None, description="Config overrides in dot-notation")
@@ -195,6 +226,7 @@ class ErrorResponse(BaseModel):
 
 
 class ReaggregateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     run_id: str = Field(..., description="The source execution run ID")
     target_aggregators: list[str] = Field(..., description="List of aggregators to compare")
     aggregator_configs: dict[str, dict[str, Any]] = Field(
@@ -209,6 +241,7 @@ class ReaggregateResponse(BaseModel):
     run_id: str
     config_hash: str
     git_sha: str | None
+    aggregator_configurations: dict[str, Any] = Field(default_factory=dict)
     
     # Nested mapping: claim_id -> aggregator_name -> ClaimVerdictSchema
     comparisons: dict[str, dict[str, ClaimVerdictSchema]] = Field(

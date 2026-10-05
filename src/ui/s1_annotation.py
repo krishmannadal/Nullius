@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -11,11 +12,11 @@ import streamlit as st
 
 from src.eval.s1_annotations import (
     AnnotationError,
+    canonical_sha256,
     export_annotations,
     load_responses,
     make_review,
     read_jsonl,
-    sha256,
     validate_annotations,
     validate_review,
 )
@@ -33,12 +34,17 @@ def main() -> None:
     )
     benchmark_dir = BENCHMARK_DIR
     metadata = json.loads((benchmark_dir / "metadata.json").read_text(encoding="utf-8"))
+    guidelines_data = (benchmark_dir / "ANNOTATION_GUIDELINES.md").read_bytes()
+    guideline_hash = canonical_sha256(guidelines_data)
+    if metadata.get("guidelines_sha256", guideline_hash) != guideline_hash:
+        st.error("Frozen guideline hash differs. Stop and resolve the protocol version.")
+        return
     with st.sidebar:
         st.header("Your session")
         identity = st.text_input("Annotator ID")
-        guideline = st.text_input("Guideline version", value="s1-guidelines-v1")
+        guideline = st.text_input("Guideline version", value=metadata.get("guideline_version", "practice-v2"), disabled=True)
         expected_hash = st.text_input(
-            "Frozen benchmark SHA-256", value=metadata["responses_hash_sha256"]
+            "Frozen benchmark SHA-256", value=metadata["responses_hash_sha256"], disabled=True
         )
         uploaded = st.file_uploader("Alternative response benchmark (optional)", type=["jsonl"])
     with st.expander("Annotation guidelines"):
@@ -54,7 +60,7 @@ def main() -> None:
     except AnnotationError as exc:
         st.error(str(exc))
         return
-    context = (sha256(responses_data), identity, guideline)
+    context = (canonical_sha256(responses_data), identity, guideline_hash)
     if st.session_state.get("s1_context") != context:
         if st.session_state.get("s1_records") or st.session_state.get("s1_completed"):
             st.error(
@@ -87,7 +93,8 @@ def main() -> None:
                         raise AnnotationError("review must be a JSON object")
                     validate_annotations(restored, responses, identity)
                     validate_review(
-                        review, responses_data, responses, annotation_upload.getvalue(), restored
+                        review, responses_data, responses, annotation_upload.getvalue(), restored,
+                        guideline_sha256=guideline_hash
                     )
                     if (
                         review["annotator_id"] != identity
@@ -122,32 +129,37 @@ def main() -> None:
     st.text(text[start:end])
     with st.form(f"claim_{response_id}", clear_on_submit=True):
         claim_text = st.text_area("Atomic factual claim")
-        decomposed = st.checkbox("Decomposed or rewritten from the source")
+        decomposed = st.checkbox("Split from a compound assertion")
+        operations = st.multiselect("Other operations", ["rewrite", "coreference"])
+        compound_id = st.text_input("Compound group ID (required for decomposition)")
         hedged = st.checkbox("Hedged assertion")
         notes = st.text_area("Notes (qualifiers, shared span, coreference or uncertainty)")
+        extra_spans = st.text_area("Additional source spans as JSON list (optional)", value="[]")
         submitted = st.form_submit_button("Add human annotation")
     if submitted:
-        ids = {r["claim_id"] for r in records if r["response_id"] == response_id}
-        number = 1
-        while f"{response_id}-claim-{number:03}" in ids:
-            number += 1
+        if decomposed:
+            operations = ["decomposition", *operations]
         record = {
+            "schema_version": "s1-claim-v2",
             "response_id": response_id,
-            "claim_id": f"{response_id}-claim-{number:03}",
+            "claim_id": f"{identity}-{response_id}-{uuid.uuid4().hex[:12]}",
             "claim_text": claim_text,
             "source_span": {"start": start, "end": end},
             "decomposed": decomposed,
             "hedged": hedged,
             "annotator_id": identity,
             "notes": notes,
+            "operations": operations,
+            "compound_id": compound_id.strip() or None,
         }
         try:
+            record["source_spans"] = [record["source_span"], *json.loads(extra_spans)]
             validate_annotations([record], responses, identity)
             records.append(record)
             if response_id in completed:
                 completed.remove(response_id)
             st.rerun()
-        except AnnotationError as exc:
+        except (AnnotationError, ValueError, TypeError) as exc:
             st.error(str(exc))
     selected = [r for r in records if r["response_id"] == response_id]
     st.subheader(f"Your annotations ({len(selected)})")
@@ -171,7 +183,9 @@ def main() -> None:
     for warning in result.warnings:
         st.warning(warning)
     annotations_data = export_annotations(records)
-    review = make_review(responses_data, annotations_data, identity, guideline, completed)
+    independent = st.checkbox("I worked independently without system outputs or another annotator's work")
+    review = make_review(responses_data, annotations_data, identity, guideline, completed,
+                         guideline_hash, independent)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("annotations.jsonl", annotations_data)

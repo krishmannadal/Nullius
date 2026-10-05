@@ -5,6 +5,7 @@ __pycache__/
 .venv_clean_audit/
 .pytest_cache/
 .ruff_cache/
+.test-artifacts/
 data/debug/index/
 results/
 !results/failure_cases/.gitkeep
@@ -21,3 +22,6 @@ walkthrough.md
 # The FAISS index is NOT committed -- it is 74 MB, rebuilds in 39 s, and is keyed by
 # the corpus fingerprint anyway.
 data/raw/
+
+# Retain superseded extension packages locally; publish the verified current package.
+nullius-extension.previous-*.zip

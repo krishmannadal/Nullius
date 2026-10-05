@@ -31,7 +31,7 @@ from src.core.trace_io import TraceWriter, read_traces, run_dir_for, write_run
 from src.data.corpus import Corpus
 from src.data.examples import load_examples
 from src.data.metrics import recall_at_k, summarise_run
-from src.pipeline import RunContext, analyze, analyze_example
+from src.pipeline import RunContext, analyze_example
 
 
 def _resolve_path(cfg: dict, key: str) -> Path:
@@ -71,6 +71,7 @@ def cmd_list_components(args) -> int:
 
 def cmd_analyze(args) -> int:
     import asyncio
+
     from src.service import NulliusService
 
     cfg = _load(args)

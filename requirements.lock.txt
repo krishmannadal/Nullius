@@ -93,3 +93,7 @@ wasabi==1.1.3
 watchdog==4.0.2
 weasel==0.4.3
 wrapt==2.3.0
+playwright==1.63.0
+ruff==0.16.5
+pyee==13.0.1
+greenlet==3.5.6

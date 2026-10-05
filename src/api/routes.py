@@ -11,12 +11,13 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from src.api.schemas import (
     AnalyzeOracleRequest,
@@ -25,14 +26,14 @@ from src.api.schemas import (
     AnnotateRequest,
     AnnotateResponse,
     ErrorResponse,
+    FailureCaseResponse,
     HealthResponse,
-    VerifyFullRequest,
-    VerifyQuickRequest,
-    VerifyQuickResponse,
     ReaggregateRequest,
     ReaggregateResponse,
     SaveFailureCaseRequest,
-    FailureCaseResponse,
+    VerifyFullRequest,
+    VerifyQuickRequest,
+    VerifyQuickResponse,
 )
 from src.core.interfaces import ContractError
 from src.core.registry import RegistryError
@@ -54,9 +55,9 @@ def _format_sse_event(event: str, data: Any) -> str:
     description="Returns diagnostic state, device info, VRAM allocation, queue depth, and loaded components.",
 )
 async def health_endpoint(
-    service: NulliusService = Depends(get_service),
+    service: Annotated[NulliusService, Depends(get_service)],
 ) -> HealthResponse:
-    diag = service.get_health()
+    diag = await asyncio.to_thread(service.get_health)
     return HealthResponse(**diag)
 
 
@@ -76,7 +77,7 @@ async def health_endpoint(
 )
 async def analyze_endpoint(
     req: AnalyzeRequest,
-    service: NulliusService = Depends(get_service),
+    service: Annotated[NulliusService, Depends(get_service)],
 ) -> AnalyzeResponse:
     try:
         trace = await service.analyze(
@@ -120,7 +121,7 @@ async def analyze_endpoint(
 )
 async def analyze_oracle_endpoint(
     req: AnalyzeOracleRequest,
-    service: NulliusService = Depends(get_service),
+    service: Annotated[NulliusService, Depends(get_service)],
 ) -> AnalyzeResponse:
     try:
         trace = await service.analyze_oracle(
@@ -170,7 +171,7 @@ async def analyze_oracle_endpoint(
 )
 async def verify_quick_endpoint(
     req: VerifyQuickRequest,
-    service: NulliusService = Depends(get_service),
+    service: Annotated[NulliusService, Depends(get_service)],
 ) -> VerifyQuickResponse:
     try:
         res = await service.verify_quick(
@@ -233,7 +234,7 @@ async def verify_quick_endpoint(
 async def verify_full_endpoint(
     req: VerifyFullRequest,
     raw_request: Request,
-    service: NulliusService = Depends(get_service),
+    service: Annotated[NulliusService, Depends(get_service)],
 ) -> Any:
     # Check if SSE streaming is requested via flag or Accept header
     client_wants_sse = req.stream or "text/event-stream" in raw_request.headers.get("accept", "")
@@ -249,7 +250,7 @@ async def verify_full_endpoint(
                     check_contracts=req.check_contracts,
                 ):
                     yield _format_sse_event(item["event"], item["data"])
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- SSE boundary must emit a structured error frame
                 yield _format_sse_event("error", {"detail": str(exc), "type": type(exc).__name__})
 
         return StreamingResponse(
@@ -296,7 +297,7 @@ async def verify_full_endpoint(
 )
 async def annotate_endpoint(
     req: AnnotateRequest,
-    service: NulliusService = Depends(get_service),
+    service: Annotated[NulliusService, Depends(get_service)],
 ) -> AnnotateResponse:
     try:
         saved = service.save_annotation(req.model_dump())
@@ -325,7 +326,7 @@ async def annotate_endpoint(
 )
 async def reaggregate_endpoint(
     req: ReaggregateRequest,
-    service: NulliusService = Depends(get_service),
+    service: Annotated[NulliusService, Depends(get_service)],
 ) -> ReaggregateResponse:
     try:
         resp_dict = service.reaggregate(
@@ -369,7 +370,7 @@ async def reaggregate_endpoint(
 )
 async def save_failure_case_endpoint(
     req: SaveFailureCaseRequest,
-    service: NulliusService = Depends(get_service),
+    service: Annotated[NulliusService, Depends(get_service)],
 ) -> FailureCaseResponse:
     try:
         res = service.save_failure_case(

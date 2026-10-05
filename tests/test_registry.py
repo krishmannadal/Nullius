@@ -84,7 +84,7 @@ def test_register_sets_the_name_used_in_traces():
     registry.register("retriever", "stub")(_Retriever)
     obj = registry.build("retriever", {"name": "stub", "params": {"corpus": "debug"}})
     assert obj.name == "stub"
-    assert obj.describe()["params"] == {"corpus": "debug"}
+    assert obj.describe()["params"] == {"corpus": "debug", "k_default": 5}
 
 
 def test_registering_under_the_wrong_kind_fails_at_decoration():
@@ -194,5 +194,5 @@ def test_pipeline_describe_is_json_shaped_provenance():
     register_all()
     described = registry.build_pipeline(BASE_CFG).describe()
     assert described["retriever"]["name"] == "stub"
-    assert described["retriever"]["params"] == {"corpus": "debug"}
+    assert described["retriever"]["params"] == {"corpus": "debug", "k_default": 5}
     assert described["k"] == 3

@@ -16,6 +16,7 @@ Contracts & Constraints:
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import requests
@@ -42,7 +43,7 @@ def format_http_error(resp: requests.Response) -> str:
     status_code = resp.status_code
     try:
         data = resp.json()
-    except Exception:
+    except ValueError:
         text = resp.text.strip()
         body_snippet = text[:300] if text else "Empty response body"
         return f"HTTP {status_code}: {body_snippet}"
@@ -126,7 +127,7 @@ def send_analyze_request(
 
     try:
         data = resp.json()
-    except Exception as exc:
+    except (ValueError, TypeError, AttributeError) as exc:
         return None, f"Backend returned HTTP 200, but response body is not valid JSON: {exc}"
 
     is_valid, validation_err = validate_response_payload(data)
@@ -136,7 +137,6 @@ def send_analyze_request(
     return data, None
 
 
-@st.cache_data(show_spinner=False, ttl=3600)
 def send_reaggregate_request(
     base_url: str,
     run_id: str,
@@ -148,6 +148,10 @@ def send_reaggregate_request(
     if cleaned.endswith("/analyze"):
         cleaned = cleaned[:-len("/analyze")].rstrip("/")
     endpoint_url = f"{cleaned}/reaggregate"
+    key = (endpoint_url, run_id, tuple(target_aggregators))
+    cached = st.session_state.get("reaggregate_snapshot")
+    if cached and cached["key"] == key and time.monotonic() - cached["at"] < 60:
+        return cached["comparisons"], None
     
     payload = {
         "run_id": run_id,
@@ -164,8 +168,12 @@ def send_reaggregate_request(
 
     try:
         data = resp.json()
-        return data.get("comparisons"), None
-    except Exception as exc:
+        comparisons = data.get("comparisons")
+        st.session_state.reaggregate_snapshot = {
+            "key": key, "at": time.monotonic(), "comparisons": comparisons,
+        }
+        return comparisons, None
+    except (ValueError, TypeError, AttributeError) as exc:
         return None, f"Invalid JSON response: {exc}"
 
 
@@ -283,6 +291,7 @@ def main() -> None:
 
     # Submission handling
     if run_clicked:
+        st.session_state.pop("reaggregate_snapshot", None)
         # Clear previous results and errors on new submission attempt
         st.session_state.result = None
         st.session_state.submitted_text = None

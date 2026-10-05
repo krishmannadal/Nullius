@@ -125,8 +125,11 @@ class ASGIClient:
 
 
 @pytest.fixture(scope="module")
-def client():
-    app = create_app(default_config_path="configs/mini.yaml")
+def client(tmp_path_factory):
+    from src.service import NulliusService
+    directory = tmp_path_factory.mktemp("api-artifacts")
+    service = NulliusService(annotation_dir=directory / "annotations", failure_dir=directory / "failures")
+    app = create_app(default_config_path="configs/mini.yaml", service=service)
     return ASGIClient(app)
 
 
@@ -314,7 +317,7 @@ def test_extension_popup_contract():
     # 6. Traceability and integrity
     assert "decisive_evidence_ids" in content, "Must read decisive evidence IDs from aggregation_trace"
     assert "badge-decisive" in content, "Must render decisive badge"
-    assert "★ DECISIVE" in content, "Must render decisive label"
+    assert "\\u2605 DECISIVE" in content or "\u2605 DECISIVE" in content, "Must render decisive label"
 
 
 def test_verify_full_sse_streaming(client: ASGIClient):
@@ -337,8 +340,6 @@ def test_verify_full_sse_streaming(client: ASGIClient):
 # --------------------------------------------------------------------------- #
 
 def test_annotate_valid_record(client: ASGIClient):
-    from pathlib import Path
-
     payload = {
         "site": "chatgpt.com",
         "model_name": "gpt-4o",
@@ -347,19 +348,20 @@ def test_annotate_valid_record(client: ASGIClient):
         "human_label": "agree",
         "human_note": "Verified accurate fact.",
     }
-    try:
-        resp = client.post("/annotate", json_body=payload)
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert data["status"] == "saved"
-        record = data["record"]
-        assert record["site"] == "chatgpt.com"
-        assert record["human_label"] == "agree"
-        assert record["response_text"] == payload["response_text"]
-    finally:
-        test_file = Path("data/annotations/annotations.jsonl")
-        if test_file.is_file():
-            test_file.unlink()
+    service = client.app.state.service
+    test_file = service.annotation_dir / "annotations.jsonl"
+    before = test_file.read_text(encoding="utf-8") if test_file.exists() else ""
+    resp = client.post("/annotate", json_body=payload)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "saved"
+    record = data["record"]
+    assert record["site"] == "chatgpt.com"
+    assert record["human_label"] == "agree"
+    assert record["response_text"] == payload["response_text"]
+    after = test_file.read_text(encoding="utf-8")
+    assert len(after) > len(before)
+    assert "Marie Curie won two Nobel prizes" in after
 
 
 def test_annotate_missing_fields_fails(client: ASGIClient):
@@ -645,7 +647,7 @@ def test_save_failure_case_round_trip_load(client: ASGIClient):
     resp = client.post("/failure-cases", json_body=fc_payload)
     assert resp.status_code == 200
 
-    cases = load_failure_cases()
+    cases = load_failure_cases(client.app.state.service.failure_dir)
     matched = [
         c for c in cases
         if c.get("researcher_annotation", {}).get("researcher_note") == unique_note

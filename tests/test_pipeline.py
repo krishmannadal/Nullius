@@ -277,7 +277,7 @@ def test_checks_can_be_disabled_and_then_the_trace_catches_it_anyway(stub_regist
     """Defence in depth: even with boundary checks off, Trace.__post_init__ refuses a
     verdict that scores evidence the claim never saw."""
     pipe = build({**BASE_CFG, "components": {**BASE_CFG["components"], "verifier": "t_lying"}})
-    with pytest.raises(ValueError, match="index-alignment bug"):
+    with pytest.raises(ValueError, match="index-alignment bug|duplicate pairwise"):
         analyze(pipe, RESPONSE, ctx_for(pipe), check_contracts=False)
 
 

@@ -62,11 +62,12 @@ harness's, so there is one backend, not two.
 | B | extractors, verifiers, 4 aggregators, 2 null baselines | **done** |
 | C | trace writer + CLI end-to-end on 20 examples | **done** |
 | D | one FastAPI app: `/analyze`, `/analyze/oracle`, `/verify/quick`, `/verify/full`, `/annotate`, `/health` | **done** |
-| E | Streamlit inspection harness | not started |
-| F | Chrome MV3 extension (steps 2–6 of its own prompt) | not started |
-| — | `docs/EXPERIMENT_BACKLOG.md` | not started |
+| E | Streamlit inspection and independent annotation harnesses | implemented |
+| F | Chrome MV3 extension: manual capture and explicit verification | implemented; synthetic browser fixtures tested |
+| S1 | Curated extraction pilot | annotation workflow implemented; human gold and real evaluation pending |
 
-FastAPI backend: **implemented**. Streamlit harness: **not implemented**. Chrome MV3 extension: **not implemented**.
+See [S1 readiness](docs/S1_READINESS.md) for verified checks and remaining prerequisites,
+and [the S1 runbook](data/eval/s1/README.md) for the gated human workflow.
 
 E and F are independent once D exists.
 
@@ -80,7 +81,7 @@ python -m pip install --upgrade pip
 pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 python -m spacy download en_core_web_sm
-pip freeze > requirements.lock.txt
+# The checked-in requirements.lock.txt records the pinned environment.
 ```
 
 The core contracts and the corpus layer need only `pyyaml` and `pytest`. BM25 adds
@@ -88,7 +89,8 @@ The core contracts and the corpus layer need only `pyyaml` and `pytest`. BM25 ad
 
 ```powershell
 python -m scripts.build_mini_corpus   # regenerate the offline corpus (already checked in)
-python -m pytest                      # the test suite currently contains >260 tests, 0 skipped with the full stack
+python -m playwright install chromium # browser fixtures
+python -m pytest                      # actual run counts are in docs/S1_READINESS.md
 
 # the FEVER corpus (optional; 1.72 GB download, one streaming pass, several minutes)
 curl -L -o data/raw/shared_task_dev.jsonl https://fever.ai/download/fever/shared_task_dev.jsonl

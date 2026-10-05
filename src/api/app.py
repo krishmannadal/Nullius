@@ -9,8 +9,8 @@ Provides:
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
-from typing import Any
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,14 +25,14 @@ from src.service import NulliusService, get_service
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Ensure default service is initialized
-    service = get_service()
     yield
 
 
 def create_app(
     default_config_path: str = "configs/mini.yaml",
     title: str = "Nullius Inspection Harness Backend",
+    service: NulliusService | None = None,
+    extension_ids: tuple[str, ...] = (),
 ) -> FastAPI:
     app = FastAPI(
         title=title,
@@ -43,6 +43,9 @@ def create_app(
         version=SCHEMA_VERSION,
         lifespan=lifespan,
     )
+    app.state.service = service or NulliusService(default_config_path=default_config_path)
+    app.dependency_overrides[get_service] = lambda: app.state.service
+    extension_ids = extension_ids or tuple(filter(None, os.environ.get("NULLIUS_EXTENSION_IDS", "").split(",")))
 
     # Local development and browser extension origins
     app.add_middleware(
@@ -54,9 +57,9 @@ def create_app(
             "http://127.0.0.1:8000",
             "http://localhost:8501",  # Streamlit default
             "http://127.0.0.1:8501",
+            *[f"chrome-extension://{identity}" for identity in extension_ids],
         ],
-        allow_origin_regex=r"^chrome-extension://.*$",
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )

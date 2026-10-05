@@ -24,10 +24,10 @@ jobs:
         # Install exact versions from the lock file
         pip install -r requirements.lock.txt
         # Dev tooling (not a runtime dependency)
-        pip install ruff
+        python -m playwright install --with-deps chromium
 
     - name: Run Ruff
-      run: ruff check src/ tests/
+      run: ruff check src/ tests/ scripts/
       
     - name: Run tests
       run: python -m pytest

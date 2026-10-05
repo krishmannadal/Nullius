@@ -27,10 +27,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.core.config import configure_console  # noqa: E402
-from src.core.types import Label  # noqa: E402
-from src.data.corpus import Corpus, Document  # noqa: E402
-from src.data.examples import Example, label_counts, save_examples, validate_against  # noqa: E402
+from src.core.config import configure_console
+from src.core.types import Label
+from src.data.corpus import Corpus, Document
+from src.data.examples import Example, label_counts, save_examples, validate_against
 
 OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "debug" / "mini"
 

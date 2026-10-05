@@ -131,6 +131,7 @@ class NLIVerifier(Verifier):
         max_length: int = DEFAULT_MAX_LENGTH,
         device: str | None = None,
         fp16: bool = True,
+        revision: str | None = None,
     ) -> None:
         super().__init__()
         import torch
@@ -144,14 +145,17 @@ class NLIVerifier(Verifier):
         # fp16 on CPU is slow and partly unimplemented; silently ignore the request.
         self.dtype = torch.float16 if (fp16 and device == "cuda") else torch.float32
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, revision=revision)
         self.model = (
-            AutoModelForSequenceClassification.from_pretrained(model_name, torch_dtype=self.dtype)
+            AutoModelForSequenceClassification.from_pretrained(model_name, torch_dtype=self.dtype, revision=revision)
             .to(device)
             .eval()
         )
         # THE mapping. Read, never assumed. See module docstring footgun #1.
         self.label_index = _resolve_label_indices(dict(self.model.config.id2label))
+        self.model_identity = {"model": model_name, "requested_revision": revision,
+                               "resolved_revision": getattr(self.model.config, "_commit_hash", None),
+                               "device": self.device, "dtype": str(self.dtype)}
         self._torch = torch
 
     def _score_pair(self, premise: str, hypothesis: str) -> tuple[float, float, float, float]:
@@ -216,6 +220,7 @@ class SimilarityVerifier(Verifier):
         model_name: str = "BAAI/bge-small-en-v1.5",
         device: str | None = None,
         query_prefix: str = "",
+        revision: str | None = None,
     ) -> None:
         super().__init__()
         import torch
@@ -230,7 +235,10 @@ class SimilarityVerifier(Verifier):
         # retrieval prefix here would measure something subtly different from what the
         # DenseRetriever measures, while looking identical.
         self.query_prefix = query_prefix
-        self.encoder = SentenceTransformer(model_name, device=device)
+        self.encoder = SentenceTransformer(model_name, device=device, revision=revision)
+        model_config = getattr(getattr(self.encoder[0], "auto_model", None), "config", None)
+        self.model_identity = {"model": model_name, "requested_revision": revision,
+                               "resolved_revision": getattr(model_config, "_commit_hash", None), "device": device}
 
     def score(self, claim: Claim, ev: Evidence) -> EvidenceVerdict:
         t0 = time.perf_counter()
@@ -282,6 +290,7 @@ class ClaimOnlyVerifier(Verifier):
         device: str | None = None,
         fp16: bool = True,
         premise: str = "",
+        revision: str | None = None,
     ) -> None:
         super().__init__()
         self.premise = premise
@@ -289,12 +298,13 @@ class ClaimOnlyVerifier(Verifier):
         # emphatically NOT a kind of NLIVerifier, and should never be substitutable for
         # one by accident.
         self._nli = NLIVerifier(
-            model_name=model_name, max_length=max_length, device=device, fp16=fp16
+            model_name=model_name, max_length=max_length, device=device, fp16=fp16, revision=revision
         )
         self.model_name = model_name
         self.max_length = int(max_length)
         self.device = self._nli.device
         self.label_index = self._nli.label_index
+        self.model_identity = self._nli.model_identity
 
     def score(self, claim: Claim, ev: Evidence) -> EvidenceVerdict:
         # ev.text is deliberately unused. That is the entire point of this class.

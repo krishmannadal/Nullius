@@ -61,8 +61,9 @@ import sys
 import unicodedata
 import zipfile
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -75,9 +76,9 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, OSError):  # pragma: no cover - non-reconfigurable stream
         pass
 
-from src.core.types import Label  # noqa: E402
-from src.data.corpus import Corpus, Document  # noqa: E402
-from src.data.examples import Example, label_counts, save_examples, validate_against  # noqa: E402
+from src.core.types import Label
+from src.data.corpus import Corpus, Document
+from src.data.examples import Example, label_counts, save_examples, validate_against
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -100,7 +101,7 @@ class ParseStats:
         return {k: v for k, v in vars(self).items()}
 
 
-def parse_lines_field(raw: str, stats: Optional[ParseStats] = None) -> tuple[str, ...]:
+def parse_lines_field(raw: str, stats: ParseStats | None = None) -> tuple[str, ...]:
     """FEVER ``lines`` -> a tuple where ``result[i]`` is FEVER's sentence *i*.
 
     Index-driven, never positional. Gaps are padded with "" so that
@@ -180,7 +181,7 @@ def is_real_wiki_member(name: str) -> bool:
     ``endswith(".jsonl")`` filter hits one *first* and dies on JSONDecodeError at
     char 0. 218 members, 109 of them real.
     """
-    if name.startswith("__MACOSX/") or "/._" in name or name.startswith("._"):
+    if name.startswith(("__MACOSX/", "._")) or "/._" in name:
         return False
     return name.endswith(".jsonl")
 

@@ -17,6 +17,7 @@ from scipy.optimize import linear_sum_assignment
 from src.eval.extraction_eval import compute_token_f1, normalize_text
 from src.eval.s1_annotations import (
     AnnotationError,
+    canonical_sha256,
     load_responses,
     read_jsonl,
     sha256,
@@ -116,7 +117,8 @@ def prepare_agreement(
     return {
         "schema_version": "s1-agreement-review-v1",
         "status": "human_agreement_review_required",
-        "responses_sha256": sha256(responses_data),
+        "responses_sha256": canonical_sha256(responses_data),
+        "guidelines_sha256": review_a.get("guidelines_sha256"),
         "annotations_a_sha256": sha256(annotations_a),
         "annotations_b_sha256": sha256(annotations_b),
         "annotator_a": review_a["annotator_id"],

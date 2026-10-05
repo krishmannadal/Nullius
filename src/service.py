@@ -17,12 +17,13 @@ Central Invariant Preserved:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import threading
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,9 +39,14 @@ from src.core.interfaces import (
     check_evidence_list,
     check_pair_verdict,
     check_rerank_is_subset,
-    Aggregator,
 )
-from src.core.registry import Pipeline, build_pipeline, build
+from src.core.registry import Pipeline, build, build_pipeline
+from src.core.trace_io import (
+    ALLOWED_FAILURE_CATEGORIES,
+)
+from src.core.trace_io import (
+    save_failure_case as save_failure_case_file,
+)
 from src.core.types import (
     SCHEMA_VERSION,
     Claim,
@@ -50,13 +56,9 @@ from src.core.types import (
     Trace,
     utcnow_iso,
 )
-from src.core.trace_io import (
-    ALLOWED_FAILURE_CATEGORIES,
-    save_failure_case as save_failure_case_file,
-)
 from src.data.corpus import Corpus
 from src.data.examples import Example, load_examples
-from src.pipeline import RunContext, _timed, _Timer, analyze, gold_evidence_for
+from src.pipeline import RunContext, _timed, _Timer, analyze
 
 
 @dataclass
@@ -64,9 +66,10 @@ class ExecutionState:
     run_id: str
     config_hash: str
     git_sha: str | None
-    claims_inputs: dict[str, tuple[Claim, list[EvidenceVerdict]]]
+    claims_inputs: dict[str, tuple[Claim, tuple[EvidenceVerdict, ...]]]
     expires_at: float
     trace: Trace
+    comparisons: dict[str, Any] = field(default_factory=dict)
 
 
 def _resolve_repo_path(path_str: str | Path) -> Path:
@@ -106,15 +109,20 @@ class NulliusService:
         self,
         default_config_path: str | Path = "configs/mini.yaml",
         preload: bool = False,
+        annotation_dir: str | Path = "data/annotations",
+        failure_dir: str | Path = "results/failure_cases",
     ) -> None:
         self.default_config_path = str(default_config_path)
+        self.annotation_dir = Path(annotation_dir)
+        self.failure_dir = Path(failure_dir)
         self._lock = asyncio.Lock()
         self._thread_lock = threading.Lock()
         self._queue_depth = 0
         self._cached_config: dict[str, Any] | None = None
         self._cached_pipeline: Pipeline | None = None
-        self._cached_corpus: Corpus | None = None
-        self._cached_examples: dict[str, Example] | None = None
+        self._cached_pipeline_key = None
+        self._cached_corpus: dict[tuple[str, str], Corpus] = {}
+        self._cached_examples: dict[tuple[str, str], dict[str, Example]] = {}
         self._execution_store: dict[str, ExecutionState] = {}
         self._store_lock = threading.Lock()
         self._MAX_STORE_SIZE = 50
@@ -145,34 +153,39 @@ class NulliusService:
         overrides: Sequence[str] | None = None,
     ) -> tuple[dict[str, Any], Pipeline]:
         with self._thread_lock:
-            # If default config without overrides is requested and cached, return it
-            if config_path is None and not overrides and self._cached_config is not None and self._cached_pipeline is not None:
-                return self._cached_config, self._cached_pipeline
-
             cfg = self._resolve_config(config_path, overrides)
+            data_key = tuple((name, hashlib.sha256(_resolve_repo_path(path).read_bytes()).hexdigest())
+                             for name, path in sorted(cfg.get("paths", {}).items())
+                             if name in {"corpus", "examples"})
+            cache_key = (config_hash(cfg), data_key)
+            if cache_key == self._cached_pipeline_key and self._cached_pipeline is not None:
+                return self._cached_config, self._cached_pipeline
             pipe = build_pipeline(cfg)
 
             # Cache if using default configuration
             if config_path is None and not overrides:
                 self._cached_config = cfg
                 self._cached_pipeline = pipe
+                self._cached_pipeline_key = cache_key
 
             return cfg, pipe
 
     def get_corpus(self, cfg: Mapping[str, Any]) -> Corpus:
         with self._thread_lock:
-            if self._cached_corpus is None:
-                corpus_path = _resolve_repo_path(cfg["paths"]["corpus"])
-                self._cached_corpus = Corpus.from_jsonl(corpus_path)
-            return self._cached_corpus
+            corpus_path = _resolve_repo_path(cfg["paths"]["corpus"]).resolve()
+            key = (str(corpus_path), hashlib.sha256(corpus_path.read_bytes()).hexdigest())
+            if key not in self._cached_corpus:
+                self._cached_corpus[key] = Corpus.from_jsonl(corpus_path)
+            return self._cached_corpus[key]
 
     def get_examples(self, cfg: Mapping[str, Any]) -> dict[str, Example]:
         with self._thread_lock:
-            if self._cached_examples is None:
-                examples_path = _resolve_repo_path(cfg["paths"]["examples"])
+            examples_path = _resolve_repo_path(cfg["paths"]["examples"]).resolve()
+            key = (str(examples_path), hashlib.sha256(examples_path.read_bytes()).hexdigest())
+            if key not in self._cached_examples:
                 examples_list = load_examples(examples_path)
-                self._cached_examples = {ex.id: ex for ex in examples_list}
-            return self._cached_examples
+                self._cached_examples[key] = {ex.id: ex for ex in examples_list}
+            return self._cached_examples[key]
 
     def get_health(self) -> dict[str, Any]:
         """Diagnostic state for monitoring and extension health polling."""
@@ -219,21 +232,14 @@ class NulliusService:
         self._queue_depth += 1
         try:
             async with self._lock:
-                cfg, pipe = self._ensure_loaded(config_path, overrides)
+                cfg, pipe = await asyncio.to_thread(self._ensure_loaded, config_path, overrides)
                 ctx = RunContext.create(cfg, pipe)
                 corpus = self.get_corpus(cfg)
-                examples = self.get_examples(cfg)
-                matching_ex = None
-                for ex in examples.values():
-                    if ex.text.strip() == response_text.strip():
-                        matching_ex = ex
-                        break
-                trace = analyze(
-                    pipe,
+                trace = await asyncio.to_thread(
+                    analyze, pipe,
                     response_text,
                     ctx,
-                    example=matching_ex,
-                    corpus=corpus if matching_ex else None,
+                    corpus=corpus,
                     retrieve_k=retrieve_k,
                     check_contracts=check_contracts,
                     mode="retrieved",
@@ -256,7 +262,7 @@ class NulliusService:
         self._queue_depth += 1
         try:
             async with self._lock:
-                cfg, pipe = self._ensure_loaded(config_path, overrides)
+                cfg, pipe = await asyncio.to_thread(self._ensure_loaded, config_path, overrides)
                 corpus = self.get_corpus(cfg)
                 examples = self.get_examples(cfg)
 
@@ -281,8 +287,8 @@ class NulliusService:
                     raise ValueError(f"Example {target_example.id!r} has no gold evidence annotated")
 
                 ctx = RunContext.create(cfg, pipe)
-                trace = analyze(
-                    pipe,
+                trace = await asyncio.to_thread(
+                    analyze, pipe,
                     target_example.text,
                     ctx,
                     example=target_example,
@@ -315,11 +321,11 @@ class NulliusService:
         self._queue_depth += 1
         try:
             async with self._lock:
-                cfg, pipe = self._ensure_loaded(config_path, overrides)
+                cfg, pipe = await asyncio.to_thread(self._ensure_loaded, config_path, overrides)
                 timer = _Timer()
 
                 with _timed(timer, "extract_ms"):
-                    claims = pipe.extractor.extract(response_text)
+                    claims = await asyncio.to_thread(pipe.extractor.extract, response_text)
                 if check_contracts:
                     check_claims(claims, response_text)
 
@@ -329,7 +335,7 @@ class NulliusService:
 
                 for claim in claims:
                     with _timed(timer, "retrieve_ms"):
-                        candidates = pipe.retriever.retrieve(claim, retrieve_k)
+                        candidates = await asyncio.to_thread(pipe.retriever.retrieve, claim, retrieve_k)
                     if check_contracts:
                         check_evidence_list(candidates, k=retrieve_k, stage="retrieve")
 
@@ -395,14 +401,14 @@ class NulliusService:
         self._queue_depth += 1
         try:
             async with self._lock:
-                cfg, pipe = self._ensure_loaded(config_path, overrides)
+                cfg, pipe = await asyncio.to_thread(self._ensure_loaded, config_path, overrides)
                 ctx = RunContext.create(cfg, pipe)
                 timer = _Timer()
                 k = pipe.k
                 pool = int(retrieve_k or k)
 
                 with _timed(timer, "extract_ms"):
-                    claims = pipe.extractor.extract(response_text)
+                    claims = await asyncio.to_thread(pipe.extractor.extract, response_text)
                 if check_contracts:
                     check_claims(claims, response_text)
 
@@ -422,13 +428,13 @@ class NulliusService:
                 for idx, claim in enumerate(claims, start=1):
                     # retrieve
                     with _timed(timer, "retrieve_ms"):
-                        candidates = pipe.retriever.retrieve(claim, pool)
+                        candidates = await asyncio.to_thread(pipe.retriever.retrieve, claim, pool)
                     if check_contracts:
                         check_evidence_list(candidates, k=pool, stage="retrieve")
 
                     # rerank
                     with _timed(timer, "rerank_ms"):
-                        reranked = pipe.reranker.rerank(claim, candidates, k)
+                        reranked = await asyncio.to_thread(pipe.reranker.rerank, claim, candidates, k)
                     if check_contracts:
                         check_rerank_is_subset(candidates, reranked)
                         check_evidence_list(reranked, k=k, stage="rerank")
@@ -439,14 +445,16 @@ class NulliusService:
                     pair_verdicts: list[EvidenceVerdict] = []
                     with _timed(timer, "verify_ms"):
                         for ev in reranked:
-                            pv = pipe.verifier.score(claim, ev)
+                            pv = await asyncio.to_thread(pipe.verifier.score, claim, ev)
                             if check_contracts:
                                 check_pair_verdict(pv, claim, ev)
                             pair_verdicts.append(pv)
 
                     # aggregate
                     with _timed(timer, "aggregate_ms"):
-                        claim_verdict = pipe.aggregator.aggregate(claim, pair_verdicts)
+                        claim_verdict = pipe.aggregator.aggregate(deepcopy(claim), tuple(pair_verdicts))
+                        if claim_verdict.per_evidence != tuple(pair_verdicts):
+                            raise ValueError("Aggregator changed the original pairwise verdicts")
                         verdicts.append(claim_verdict)
 
                     yield {
@@ -487,6 +495,7 @@ class NulliusService:
 
     def _store_run(self, trace: Trace) -> Trace:
         """Capture the immutable inputs of a pipeline run in the bounded execution store."""
+        stored_trace = Trace.from_dict(deepcopy(trace.to_dict()))
         # Clean up expired
         now = time.time()
         with self._store_lock:
@@ -496,9 +505,9 @@ class NulliusService:
 
             # Build inputs map
             claims_inputs = {}
-            for claim in trace.claims:
-                cv = trace.verdict_by_claim(claim.id)
-                evidence_verdicts = list(cv.per_evidence) if cv else []
+            for claim in stored_trace.claims:
+                cv = stored_trace.verdict_by_claim(claim.id)
+                evidence_verdicts = tuple(cv.per_evidence) if cv else ()
                 claims_inputs[claim.id] = (claim, evidence_verdicts)
 
             # Insert
@@ -508,7 +517,7 @@ class NulliusService:
                 git_sha=trace.git_sha,
                 claims_inputs=claims_inputs,
                 expires_at=now + self._STORE_TTL,
-                trace=trace,
+                trace=stored_trace,
             )
 
             # Evict oldest if full
@@ -521,7 +530,7 @@ class NulliusService:
     def save_annotation(
         self,
         record: Mapping[str, Any],
-        out_dir: str | Path = "data/annotations",
+        out_dir: str | Path | None = None,
     ) -> dict[str, Any]:
         """Save a human annotation record to disk.
 
@@ -535,7 +544,7 @@ class NulliusService:
         if missing:
             raise ValueError(f"Annotation record missing required fields: {missing}")
 
-        target_dir = _resolve_repo_path(out_dir)
+        target_dir = _resolve_repo_path(out_dir or self.annotation_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
         target_file = target_dir / "annotations.jsonl"
 
@@ -557,10 +566,9 @@ class NulliusService:
         }
 
         line = json.dumps(annotated_record, ensure_ascii=False) + "\n"
-        with self._thread_lock:
-            with target_file.open("a", encoding="utf-8") as fh:
-                fh.write(line)
-                fh.flush()
+        with self._thread_lock, target_file.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.flush()
 
         return annotated_record
 
@@ -582,7 +590,7 @@ class NulliusService:
                     del self._execution_store[run_id]
                 raise KeyError(f"Run ID {run_id!r} not found or expired")
             # Snapshot the state we need
-            claims_inputs = dict(state.claims_inputs)
+            claims_inputs = deepcopy(state.claims_inputs)
             config_hash = state.config_hash
             git_sha = state.git_sha
 
@@ -599,14 +607,23 @@ class NulliusService:
             comparisons[claim_id] = {}
             for target, agg_instance in aggregators.items():
                 # Pass identical, immutable data
-                claim_verdict: ClaimVerdict = agg_instance.aggregate(claim, verdicts) # type: ignore[attr-defined]
+                claim_verdict: ClaimVerdict = agg_instance.aggregate(deepcopy(claim), tuple(verdicts))
+                if claim_verdict.per_evidence != verdicts:
+                    raise ValueError("Aggregator changed original pairwise inputs")
                 comparisons[claim_id][target] = claim_verdict.to_dict()
+                comparisons[claim_id][target]["aggregation_trace"]["configuration"] = agg_instance.describe()
+
+        configurations = {name: agg.describe() for name, agg in aggregators.items()}
+        with self._store_lock:
+            if run_id in self._execution_store:
+                self._execution_store[run_id].comparisons = deepcopy(comparisons)
 
         return {
             "run_id": run_id,
             "config_hash": config_hash,
             "git_sha": git_sha,
             "comparisons": comparisons,
+            "aggregator_configurations": configurations,
         }
 
     def save_failure_case(
@@ -618,7 +635,7 @@ class NulliusService:
         human_label: str | None = None,
         oracle_run_id: str | None = None,
         alternative_aggregations: dict[str, Any] | None = None,
-        out_dir: str | Path = "results/failure_cases",
+        out_dir: str | Path | None = None,
     ) -> dict[str, Any]:
         """Save a structured failure case linked to server-side execution state.
 
@@ -659,18 +676,21 @@ class NulliusService:
 
                 if oracle_state.trace.response_text.strip() != state.trace.response_text.strip():
                     raise ValueError("Source run and oracle run have mismatched response text")
+                if oracle_state.trace.resolved_config.get("data_identity") != state.trace.resolved_config.get("data_identity"):
+                    raise ValueError("Source and oracle have mismatched corpus identity")
+                if oracle_state.config_hash != state.config_hash:
+                    raise ValueError("Source and oracle have mismatched configuration")
 
                 oracle_trace = oracle_state.trace
 
-            source_trace = state.trace
+            source_trace = deepcopy(state.trace)
+            if alternative_aggregations is not None:
+                expected = state.comparisons.get(claim_id)
+                if expected is None or alternative_aggregations != expected:
+                    raise ValueError("Alternative aggregations must match server-held comparisons")
+                alternative_aggregations = deepcopy(expected)
 
-        corpus_fp = None
-        try:
-            cfg, _ = self._ensure_loaded()
-            corpus = self.get_corpus(cfg)
-            corpus_fp = corpus.fingerprint()
-        except (RuntimeError, ValueError, FileNotFoundError, AttributeError, KeyError):
-            corpus_fp = None
+        corpus_fp = source_trace.resolved_config.get("data_identity", {}).get("corpus", {}).get("sha256")
 
         researcher_annotation = {
             "failure_category": failure_category,
@@ -686,7 +706,7 @@ class NulliusService:
             researcher_annotation=researcher_annotation,
             corpus_fingerprint=corpus_fp,
             alternative_aggregations=alternative_aggregations,
-            out_dir=out_dir,
+            out_dir=out_dir or self.failure_dir,
         )
 
         return {

@@ -194,7 +194,9 @@ def build(kind: str, spec: Any) -> Component:
     _validate_params(cls, params, kind, name)
     obj = cls(**params)  # type: ignore[call-arg]
     # Record what it was actually built with, for Trace.resolved_config.
-    obj.resolved_params = dict(params)
+    defaults = {n: p.default for n, p in inspect.signature(cls.__init__).parameters.items()
+                if n != "self" and p.default is not inspect.Parameter.empty}
+    obj.resolved_params = {**defaults, **params}
     return obj
 
 

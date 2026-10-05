@@ -144,8 +144,10 @@ class LLMClaimExtractor(ClaimExtractor):
     with ``on_miss="error"`` it raises instead, which is what you want in an experiment
     where a silent fallback would quietly mix two extractors in one table.
 
-    No network call is implemented. ``on_miss="call"`` raises ``NotImplementedError``
-    naming what would have to be built, rather than pretending an API exists.
+    This debug adapter does not make network calls. Formal S1 uses
+    scripts.generate_s1_llm_cache and src.eval.s1_predictions to preserve real
+    provider responses without deduplication. Hand-written debug caches are not
+    admissible S1 prediction artifacts.
     """
 
     def __init__(
@@ -173,7 +175,12 @@ class LLMClaimExtractor(ClaimExtractor):
         # Accept both {"entries": {...}} and a bare mapping, so a hand-written file
         # does not need boilerplate.
         entries = raw.get("entries", raw) if isinstance(raw, dict) else {}
-        return {str(k): [str(c) for c in v] for k, v in entries.items()}
+        if not isinstance(entries, dict) or any(
+            not isinstance(k, str) or not isinstance(v, list) or any(not isinstance(c, str) for c in v)
+            for k, v in entries.items()
+        ):
+            raise ValueError("Debug cache must map response hashes to arrays of claim strings")
+        return entries
 
     @staticmethod
     def cache_key(response: str) -> str:
@@ -199,10 +206,9 @@ class LLMClaimExtractor(ClaimExtractor):
                 )
             if self.on_miss == "call":
                 raise NotImplementedError(
-                    "on_miss='call' would need: a provider client, a decomposition "
-                    "prompt, response parsing, retry/timeout handling, and a cache "
-                    "write-back. None of that exists yet, and this build is offline "
-                    "by design. Write the decomposition into the cache file instead."
+                    "This debug adapter is offline. For formal S1, use "
+                    "scripts.generate_s1_llm_cache after human gold freeze, then "
+                    "src.eval.s1_predictions. Do not substitute hand-written outputs."
                 )
             claims = self._fallback_extractor().extract(response)
             return [
@@ -247,6 +253,9 @@ class LLMClaimExtractor(ClaimExtractor):
                         "decomposed": True,
                         "span_is_exact": span is not None and span.text_from(response) == text,
                         "n_claims_in_cache": len(texts),
+                        "postprocessing_version": "debug-trim-dedup-heuristic-span-v1",
+                        "raw_claim_indices": [j for j, raw in enumerate(texts) if raw.strip() == text],
+                        "scientific_use": "debug adapter; S1 uses s1_predictions without deduplication",
                     },
                 )
             )

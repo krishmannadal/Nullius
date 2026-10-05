@@ -1,0 +1,8 @@
+[
+  {"id":"calibration-1","text":"The vessel may sink.","spans":[{"start":0,"end":20,"text":"The vessel may sink."}]},
+  {"id":"calibration-2","text":"Mira said the vessel sank.","spans":[{"start":0,"end":26,"text":"Mira said the vessel sank."}]},
+  {"id":"calibration-3","text":"The key is brass or copper.","spans":[{"start":0,"end":27,"text":"The key is brass or copper."}]},
+  {"id":"calibration-4","text":"If pressure rises, the valve opens.","spans":[{"start":0,"end":35,"text":"If pressure rises, the valve opens."}]},
+  {"id":"calibration-5","text":"The lamp is not lit.","spans":[{"start":0,"end":20,"text":"The lamp is not lit."}]},
+  {"id":"calibration-6","text":"Lena sings and dances.","spans":[{"start":0,"end":10,"text":"Lena sings"},{"start":0,"end":4,"text":"Lena"},{"start":15,"end":21,"text":"dances"}]}
+]

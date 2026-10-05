@@ -159,11 +159,11 @@ def test_on_miss_error_refuses_to_silently_mix_extractors(cache_file: Path):
         ex.extract("An unseen response entirely.")
 
 
-def test_on_miss_call_names_what_is_missing_rather_than_faking_it(cache_file: Path):
+def test_debug_call_directs_users_to_gated_s1_provider_workflow(cache_file: Path):
     from src.components.extractors import LLMClaimExtractor
 
     ex = LLMClaimExtractor(cache_path=str(cache_file), on_miss="call")
-    with pytest.raises(NotImplementedError, match="None of that exists yet"):
+    with pytest.raises(NotImplementedError, match="scripts.generate_s1_llm_cache after human gold freeze"):
         ex.extract("An unseen response entirely.")
 
 

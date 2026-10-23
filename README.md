@@ -1,166 +1,139 @@
-# Nullius — a claim-level hallucination-detection *inspection harness*
+# Nullius
+### Inspect how a claim-verification pipeline reaches its verdict
 
-> *Nullius in verba* — take nobody's word for it. Including this pipeline's.
+Nullius is a local **research inspection harness** for people studying hallucination detection and evidence-based verification. It exposes extracted claims, retrieved evidence, per-pair scores and aggregation decisions so a researcher can locate failure at the stage where it happens.
 
-This repository is a **research instrument**, not a system. Its job is to let you see
-what every stage of a claim-verification pipeline does to a given input, so you can
-find where it fails. Every component is a placeholder behind a clean interface. The
-value is the interfaces and the visibility, not the quality of the defaults.
+**Python · FastAPI · Streamlit · BM25 / FAISS · pretrained NLI**
 
-**Nothing in this repo is tuned, and nothing in it is evaluated.** Every corpus here is
-built to contain the gold evidence for its own examples, so retrieval recall over it is
-meaningless as a number — and so is anything downstream of it. Two exist:
+[Try it locally](#try-it-locally) · [Implementation map](docs/IMPLEMENTATION_MAP.md) · [S1 readiness](docs/S1_READINESS.md) · [Annotation runbook](data/eval/s1/README.md)
 
-* `data/debug/mini/` — 40 hand-written documents, 115 sentences, 14 examples. Checked
-  in, offline, milliseconds. This is what the tests run against.
-* `data/debug/` — FEVER-derived: 200 dev claims (stratified) plus ~4,000 Wikipedia
-  pages, built by `scripts/build_debug_corpus.py` from FEVER's 2017 dump. The gold page
-  for every shipped claim is present **by construction** and the distractor pool is not
-  adversarial, so recall over it is an artifact of its assembly. `data/debug/manifest.json`
-  carries that warning inside the artifact. See `docs/data-fever.md`.
+> Engineering components are implemented. **Scientific detection performance has not been established.** Debug corpora contain gold evidence by construction; their scores are not meaningful retrieval or hallucination-detection benchmarks. Human S1 annotation and evaluation are pending.
 
-Both are labelled `harness.kind: debug` in the config, and the UI will show a banner.
-Full-corpus indexing is a later problem; see `docs/EXPERIMENT_BACKLOG.md`.
+## Why the design is useful
 
-## The pipeline
+A verifier scores **one claim–evidence pair**. A separate aggregator converts those pairwise scores into a claim verdict, recording its rule, explanation and decisive evidence IDs. That separation lets aggregation rules be compared on the same score snapshot without another NLI pass.
 
-```
-response text
-  → ClaimExtractor       → list[Claim]
-  → Retriever            → list[Evidence]      (per claim)
-  → Reranker (optional)  → list[Evidence]
-  → Verifier             → EvidenceVerdict     (per claim-evidence PAIR)
-  → Aggregator           → ClaimVerdict        (Supported / Contradicted / Insufficient / Abstain)
-  → Trace                → JSONL
+```mermaid
+flowchart TD
+  T[Response text] --> X[Claim extractor]
+  X --> R[Evidence retrieval]
+  R --> K[Optional reranker]
+  K --> V[Pairwise verifier]
+  V --> A[Claim aggregator]
+  A --> J[JSONL trace]
+  J --> U[Inspection UI]
+  J --> C[Reaggregation comparison]
 ```
 
-The load-bearing design decision: the **Verifier scores one pair** and the
-**Aggregator is a separate object**. A verifier cannot pool over *k* because its
-signature does not let it see *k*. Aggregation is the slot most likely to become the
-research question, so it is isolated and instrumented from day one — every aggregator
-must write `rule`, `explanation`, and `decisive_evidence_ids` into
-`aggregation_trace`, and the type system enforces it.
+Verdicts include Supported, Contradicted, Insufficient and Abstain. Scores are uncalibrated; they are not probabilities that a response is true.
 
-Because of that split, **all five aggregators run on identical per-pair scores** — the
-NLI model runs once and comparing four aggregation rules costs zero extra forward
-passes.
+## Implemented surface
 
-Two null baselines are wired in from the start, not bolted on later:
-`claim_only` (verifies with the evidence blanked) and `majority` (votes, discarding
-probability magnitudes). If the real pipeline cannot beat them, that is the finding.
+- Typed contracts, YAML component registry, provenance and corpus fingerprints.
+- BM25, dense retrieval and hybrid reciprocal-rank fusion; optional cross-encoder reranking.
+- spaCy sentence extraction and cached LLM decomposition; pretrained NLI, cosine and claim-only verification paths.
+- Max-entailment, noisy-OR, rank-weighted, threshold/abstain and majority aggregation.
+- CLI, FastAPI JSON/SSE endpoints, Streamlit inspection and independent annotation interfaces.
+- Chrome MV3 extension for explicit capture/verification, tested with synthetic browser fixtures; not a published browser-store product.
+- Gated S1 annotation, adjudication, gold/prediction freezing and human matching workflow. Implemented gates do not substitute for the humans and artifacts they require.
 
-## Build status
+## Try it locally
 
-The original seven-step plan and `docs/CLAUDE_CODE_EXTENSION_PROMPT.md` have been
-merged into one order (ADR-012) — the extension's endpoint set is a superset of the
-harness's, so there is one backend, not two.
+Python **3.11** is the documented baseline. Create an isolated environment, then install the checked-in requirements:
 
-| Step | What | State |
-|---|---|---|
-| 1 | `src/core/` — types, interfaces, registry, config | **done** |
-| A | corpus layer + mini & FEVER corpora + BM25 / dense / hybrid retrievers | **done** |
-| B | extractors, verifiers, 4 aggregators, 2 null baselines | **done** |
-| C | trace writer + CLI end-to-end on 20 examples | **done** |
-| D | one FastAPI app: `/analyze`, `/analyze/oracle`, `/verify/quick`, `/verify/full`, `/annotate`, `/health` | **done** |
-| E | Streamlit inspection and independent annotation harnesses | implemented |
-| F | Chrome MV3 extension: manual capture and explicit verification | implemented; synthetic browser fixtures tested |
-| S1 | Curated extraction pilot | annotation workflow implemented; human gold and real evaluation pending |
-
-See [S1 readiness](docs/S1_READINESS.md) for verified checks and remaining prerequisites,
-and [the S1 runbook](data/eval/s1/README.md) for the gated human workflow.
-
-E and F are independent once D exists.
-
-## Setup (Windows 11, Python 3.11)
-
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-# torch first, from the CUDA 12.1 index (the PyPI wheel is CPU-only):
-pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cu121
-pip install -r requirements.txt
-python -m spacy download en_core_web_sm
-# The checked-in requirements.lock.txt records the pinned environment.
+```bash
+git clone https://github.com/krishmannadal/Nullius.git
+cd Nullius
+python -m venv .venv
+source .venv/bin/activate
+# Windows PowerShell: .\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m src.cli list-components
 ```
 
-The core contracts and the corpus layer need only `pyyaml` and `pytest`. BM25 adds
-`rank_bm25`; the dense retriever adds `torch`, `sentence-transformers` and `faiss-cpu`.
+For the originally recorded Windows CUDA environment, install `torch==2.4.1` from the CUDA 12.1 PyTorch wheel index before the requirements. CPU execution is possible; no API key is needed for the standard local model pipeline. The spaCy model wheel is already listed in requirements. `requirements.lock.txt` records the historical environment; it is not proof of fresh cross-platform resolution.
 
-```powershell
-python -m scripts.build_mini_corpus   # regenerate the offline corpus (already checked in)
-python -m playwright install chromium # browser fixtures
-python -m pytest                      # actual run counts are in docs/S1_READINESS.md
+Full inference loads external pretrained spaCy/retrieval/NLI assets. A small checked-in corpus does **not** mean a first run is model-download-free. A fresh full dependency install was not validated in this refresh.
 
-# the FEVER corpus (optional; 1.72 GB download, one streaming pass, several minutes)
-curl -L -o data/raw/shared_task_dev.jsonl https://fever.ai/download/fever/shared_task_dev.jsonl
-curl -L -o data/raw/wiki-pages.zip        https://fever.ai/download/fever/wiki-pages.zip
-python -m scripts.build_debug_corpus --n-claims 200 --n-docs 4000 --seed 1337
+### Inspect one example
+
+```bash
+python -m src.cli analyze --config configs/mini.yaml --text "Marie Curie was born in Warsaw." --json
 ```
 
-A **skip is not a pass** — `python -m pytest -rs` prints why. All skips mean a missing
-dependency, never a disabled check.
+This is an **example command**, not a claimed benchmark result. Inspect the retrieved sentences, pairwise scores, aggregation explanation and raw trace. `configs/mini.yaml` selects a 40-document debug corpus built for inspection. To process its shipped examples:
 
-## Layout
-
-```
-src/core/types.py            frozen dataclasses: Claim, Evidence, EvidenceVerdict, ClaimVerdict, Trace
-src/core/interfaces.py       the five ABCs + runtime contract checks
-src/core/registry.py         YAML name -> component class; what the UI dropdowns read
-src/core/config.py           config load / override / hash, seeding, git provenance
-src/data/corpus.py           canonical sentence order + fingerprint (index-alignment guard)
-src/data/examples.py         labelled examples with gold evidence keys
-src/data/metrics.py          per-example Recall@k, gold ranks (None when gold is empty)
-src/components/extractors.py  spacy sentence split; LLM decomposition from a cache
-src/components/retrievers.py  BM25, dense (bge-small + FAISS flat), hybrid (RRF)
-src/components/rerankers.py   noop, cross-encoder (ms-marco-MiniLM)
-src/components/verifiers.py   NLI (DeBERTa-v3-base), cosine similarity, claim-only NULL
-src/components/aggregators.py max-entailment, noisy-OR, rank-weighted, threshold+abstain, majority NULL
-src/service.py               shared application service layer (CLI + FastAPI execution)
-src/api/                     FastAPI application, routes, and boundary Pydantic schemas
-scripts/build_mini_corpus.py  regenerates the checked-in 40-doc offline corpus
-scripts/build_debug_corpus.py FEVER -> data/debug/ (streams the 1.7 GB dump, never extracts)
-configs/debug.yaml           FEVER debug harness (read its header before believing a number)
-configs/mini.yaml            the 40-doc corpus; what you point at while changing code
-data/debug/mini/             40 docs, 115 sentences, 14 examples — for tests, measures nothing
-tests/                       contract tests for the silent-bug surfaces
-docs/                        one doc per module + DECISIONS + OPEN_QUESTIONS + EXPERIMENT_BACKLOG
-results/failure_cases/       where the UI's "save as failure case" button writes
+```bash
+python -m src.cli run --config configs/mini.yaml --limit 14
 ```
 
-## FastAPI backend
+### Use the API and UI
 
-Start the local backend server:
+Start the backend from the repository root:
 
-```powershell
-uvicorn src.api.app:app --host 127.0.0.1 --port 8000
+```bash
+python -m uvicorn src.api.app:app --host 127.0.0.1 --port 8000
 ```
 
-Interactive OpenAPI documentation is live at `http://127.0.0.1:8000/docs` and schema at `/openapi.json`.
+Open `http://127.0.0.1:8000/docs`. In another terminal, with the same environment active:
 
-Endpoints:
-* `GET /health` — runtime diagnostics, device, CUDA availability, VRAM allocation, queue depth, loaded components.
-* `POST /analyze` — standard retrieved pipeline run over response text.
-* `POST /analyze/oracle` — oracle evaluation with gold evidence substitution (strictly isolated from normal inference).
-* `POST /verify/quick` — Tier 1 availability check (extracts claims and queries retrieval; never asserts that a claim is false).
-* `POST /verify/full` — Tier 2 full pipeline execution (supports JSON or Server-Sent Events streaming via `stream=true`).
-* `POST /annotate` — writes a structured annotation record to `data/annotations/annotations.jsonl`.
+```bash
+python -m streamlit run src/ui/app.py
+```
 
-Example request:
+Use the Streamlit URL printed in the terminal. The UI's default backend is `http://127.0.0.1:8000`. A request example:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/analyze \
   -H "Content-Type: application/json" \
-  -d '{"text": "Marie Curie was born in Warsaw."}'
+  -d '{"text":"Marie Curie was born in Warsaw."}'
 ```
 
-*Note: Nullius is a research inspection harness, not a production detector.*
+No public demo endpoint is provided. This is a trusted local-operator service, without production authentication.
 
-## Documentation contract
+<details>
+<summary>Endpoints, extension and research workflow</summary>
 
-Every module gets `docs/<module>.md` with, in order: problem; formal I/O with shapes
-and dtypes; algorithm in pseudocode; a line-by-line walkthrough of only the lines that
-matter; data flow; a runnable test with expected output and failure signature;
-limitations; rejected alternatives. `docs/DECISIONS.md` is an append-only ADR log.
-`docs/OPEN_QUESTIONS.md` lists everything resolved by assumption rather than by
-evidence — read it before trusting any behaviour it names.
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Runtime diagnostics |
+| `POST /analyze` | Standard retrieved pipeline |
+| `POST /analyze/oracle` | Explicit gold-evidence substitution for diagnosis |
+| `POST /verify/quick` | Extraction/retrieval availability, not a truth judgment |
+| `POST /verify/full` | Full JSON or SSE execution |
+| `POST /annotate` | Structured annotation records |
+
+The backend accepts optional `NULLIUS_EXTENSION_IDS` (comma-separated Chrome IDs) for explicit extension origins. Follow [extension packaging](docs/extension-package.json) and [API details](docs/api.md); authenticated live ChatGPT capture was not established by fixture tests.
+
+The [S1 runbook](data/eval/s1/README.md) is authoritative for annotation. Two independent annotators, adjudication, frozen gold, real provider outputs and human system-to-gold matching are required before scientific metrics. Do not promote synthetic fixtures or template files into evidence. Protocol provenance is explicitly limited in [S1 readiness](docs/S1_READINESS.md).
+
+</details>
+
+## Verification and limitations
+
+The 23 October 2026 documentation audit independently ran **124 core tests** across types, configuration, aggregators and corpus handling: 124 passed, zero skipped. This does not exercise model downloads, NLI inference, live extension capture or full end-to-end detection.
+
+[S1_READINESS.md](docs/S1_READINESS.md) records an earlier **437-test** developer run in a cached Windows environment. That is historical engineering evidence, not a fresh full-suite reproduction or a scientific benchmark.
+
+The mini corpus and FEVER-derived debug corpus were assembled with gold evidence present. Retrieval difficulty, natural claim distribution and calibrated uncertainty remain unresolved. No headline accuracy/F1 is claimed.
+
+Next: complete independent annotation and adjudication; freeze provenance; run real provider/baseline outputs; then evaluate extraction under the stated pilot protocol. Full-corpus retrieval and end-to-end detection require separate studies.
+
+<details>
+<summary>Tests and optional FEVER data</summary>
+
+```bash
+python -m pytest -rs
+python -m playwright install chromium
+python -m scripts.build_mini_corpus
+```
+
+Browser dependencies/assets are required for extension/UI tests. Inspect reported skips instead of counting them as passes. See [data documentation](docs/data-fever.md) for the optional FEVER download and rebuild; it is not required to use the tracked mini corpus.
+
+`src/core/`: contracts/configuration; `src/components/`: methods; `src/service.py`: shared orchestration; `src/api/`: HTTP; `src/ui/`: inspection; `src/eval/`: gated research workflow; `tests/`: regression and contract checks.
+
+</details>
+
+## Credits and licensing
+
+Repository history records work by Krishmannadal/krishna. Third-party pretrained components and FEVER data retain their own terms; see [data-fever.md](docs/data-fever.md) and component documentation for sources. No repository-level license file is present. No license is added or implied by this README.
